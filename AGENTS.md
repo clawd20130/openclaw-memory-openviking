@@ -68,7 +68,7 @@ Run tests:
 npm test
 ```
 
-All tests must pass before shipping changes (currently 19 tests).
+All tests must pass before shipping changes (currently 20 tests).
 
 ## 7. Local Integration Smoke Test (OpenViking)
 
@@ -87,7 +87,29 @@ Success criteria:
 - Plugin status is `loaded`
 - `toolNames` contains `memory_search` and `memory_get`
 
-## 8. Change Rules (Do / Don't)
+## 8. Local Deploy Notes (`openclaw plugins install --link`)
+
+Use this workflow when deploying the local repo build into OpenClaw:
+
+```bash
+npm run build
+openclaw plugins install --link /absolute/path/to/openviking-memory-plugin
+openclaw gateway restart
+openclaw plugins info openclaw-memory-openviking --json
+```
+
+Required checks:
+
+- `status` is `loaded`.
+- `source` points to this repository (`.../openviking-memory-plugin/dist/index.js`), not a stale copy under `~/.openclaw/plugins/...`.
+
+Important cautions:
+
+- `openclaw plugins install --link` updates `~/.openclaw/openclaw.json`. Re-check `plugins.load.paths`, `plugins.entries`, and `plugins.slots.memory` after install.
+- If you see `duplicate plugin id detected`, multiple plugin copies are being discovered from different load paths. Remove or move stale copies (commonly under `~/.openclaw/plugins`) and restart the gateway.
+- Always restart the gateway after install/update so the running process picks up the linked build.
+
+## 9. Change Rules (Do / Don't)
 
 Do:
 
@@ -101,7 +123,7 @@ Don't:
 - Do not put schema-inconsistent fields in examples.
 - Do not skip tests for externally visible behavior changes.
 
-## 9. Pre-commit Checklist
+## 10. Pre-commit Checklist
 
 - `npm run build` succeeds.
 - `npm test` passes.
