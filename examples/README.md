@@ -19,7 +19,7 @@ npm install -g @kevinzhow/openclaw-memory-openviking
       "@kevinzhow/openclaw-memory-openviking": {
         enabled: true,
         config: {
-          baseUrl: "http://localhost:8080"
+          baseUrl: "http://127.0.0.1:1933"
         }
       }
     }
@@ -37,7 +37,7 @@ npm install -g @kevinzhow/openclaw-memory-openviking
       openviking: {
         enabled: true,
         config: {
-          baseUrl: "http://localhost:8080",
+          baseUrl: "http://127.0.0.1:1933",
           mappings: {
             // 自定义映射
             "work-notes.md": "viking://work/notes",
@@ -54,7 +54,7 @@ npm install -g @kevinzhow/openclaw-memory-openviking
 
 ```bash
 # ~/.bashrc 或 ~/.zshrc
-export OPENVIKING_URL="http://localhost:8080"
+export OPENVIKING_URL="http://127.0.0.1:1933"
 export OPENVIKING_API_KEY="your-api-key"
 ```
 

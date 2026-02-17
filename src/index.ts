@@ -78,7 +78,7 @@ const plugin: OpenClawPluginDefinition = {
       baseUrl: {
         label: "OpenViking Base URL",
         help: "HTTP endpoint of OpenViking service (e.g., http://localhost:8080). If auto-start is enabled, this is where the server will be available.",
-        placeholder: "http://localhost:8080"
+        placeholder: "http://127.0.0.1:1933"
       },
       apiKey: {
         label: "API Key",

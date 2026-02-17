@@ -40,7 +40,7 @@ npm install && npm run build
         enabled: true,
         config: {
           // OpenViking 服务地址
-          baseUrl: "http://localhost:8080",
+          baseUrl: "http://127.0.0.1:1933",
           
           // 可选: API Key
           apiKey: "your-api-key",

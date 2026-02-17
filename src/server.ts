@@ -27,7 +27,7 @@ export class OpenVikingServerManager {
   constructor(options: ServerManagerOptions) {
     this.config = {
       host: "127.0.0.1",
-      port: 8080,
+      port: 1933,
       startupTimeoutMs: 30000,
       ...options.config
     };

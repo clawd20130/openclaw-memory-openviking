@@ -30,7 +30,7 @@ export interface ServerConfig {
   dataDir?: string;
   /** 主机地址，默认 127.0.0.1 */
   host?: string;
-  /** 端口，默认 8080 */
+  /** 端口，默认 1933 */
   port?: number;
   /** 启动超时，默认 30000ms */
   startupTimeoutMs?: number;
