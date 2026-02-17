@@ -13,7 +13,7 @@ Use OpenViking as the OpenClaw memory backend, exposing `memory_search` and `mem
 
 - Search via OpenViking: `POST /api/v1/search/find` or `POST /api/v1/search/search`
 - Read content via OpenViking: `GET /api/v1/content/read`, `GET /api/v1/content/overview`
-- Sync local memory files to OpenViking using `POST /api/v1/resources` + `POST /api/v1/fs/mkdir` + `POST /api/v1/fs/mv`
+- Sync local memory files to OpenViking using `GET /api/v1/fs/stat` + `POST /api/v1/resources` (with `POST /api/v1/fs/mkdir` / `DELETE /api/v1/fs` only when needed)
 - Automatically falls back to local file reads when OpenViking reads fail
 
 ## Installation

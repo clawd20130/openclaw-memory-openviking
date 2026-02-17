@@ -9,6 +9,7 @@ import type {
   OpenVikingApiResponse,
   OpenVikingFindRequest,
   OpenVikingFindResult,
+  OpenVikingFsStat,
   OpenVikingHealthStatus,
   OpenVikingPluginConfig,
   OpenVikingSystemStatus
@@ -240,6 +241,17 @@ export class OpenVikingClient {
       method: "POST",
       path: "/api/v1/fs/mkdir",
       body: { uri }
+    });
+  }
+
+  /**
+   * 读取资源状态
+   */
+  async stat(uri: string): Promise<OpenVikingFsStat> {
+    return await this.request<OpenVikingFsStat>({
+      method: "GET",
+      path: "/api/v1/fs/stat",
+      query: { uri }
     });
   }
 

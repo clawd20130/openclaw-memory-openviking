@@ -41,6 +41,7 @@ Current implementation depends on these endpoints. If any endpoint behavior chan
 - `GET /api/v1/content/overview`
 - `GET /api/v1/content/abstract`
 - `POST /api/v1/resources`
+- `GET /api/v1/fs/stat`
 - `POST /api/v1/fs/mkdir`
 - `DELETE /api/v1/fs`
 - `POST /api/v1/fs/mv`

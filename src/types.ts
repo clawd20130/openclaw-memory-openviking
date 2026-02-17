@@ -141,3 +141,11 @@ export interface OpenVikingSystemStatus {
   initialized: boolean;
   user: string;
 }
+
+export interface OpenVikingFsStat {
+  uri: string;
+  isDir?: boolean;
+  size?: number;
+  modTime?: string;
+  [key: string]: unknown;
+}

@@ -439,15 +439,17 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     const fullPath = path.join(this.workspaceDir, safeRelPath);
     const desiredRootUri = this.mapper.toVikingUri(safeRelPath);
     const targetParentUri = this.mapper.toTargetParentUri(safeRelPath);
-    const stagingUri = this.mapper.getStagingUri();
 
     this.logger?.debug?.(
-      `openviking sync file relPath=${safeRelPath}, staging=${stagingUri}, target=${desiredRootUri}`
+      `openviking sync file relPath=${safeRelPath}, parent=${targetParentUri}, target=${desiredRootUri}`
     );
+
+    await this.ensureTargetParent(targetParentUri);
+    await this.tryRemove(desiredRootUri);
 
     const importResult = await this.client.addResource({
       path: fullPath,
-      target: stagingUri,
+      target: targetParentUri,
       reason: `OpenClaw memory sync: ${safeRelPath}`,
       wait: false
     });
@@ -457,12 +459,21 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
       throw new Error(`OpenViking import result missing root_uri: ${safeRelPath}`);
     }
 
-    await this.ensureTargetParent(targetParentUri);
-    await this.tryRemove(desiredRootUri);
-    await this.client.move(importedRoot, desiredRootUri);
+    if (this.normalizeUri(importedRoot) !== this.normalizeUri(desiredRootUri)) {
+      this.logger?.warn(
+        `openviking import root mismatch for ${safeRelPath}: imported=${importedRoot}, expected=${desiredRootUri}; move to expected path`
+      );
+      await this.tryRemove(desiredRootUri);
+      await this.client.move(importedRoot, desiredRootUri);
+    }
   }
 
   private async ensureTargetParent(uri: string): Promise<void> {
+    if (await this.pathExists(uri)) {
+      this.logger?.debug?.(`openviking mkdir skipped (already exists): ${uri}`);
+      return;
+    }
+
     try {
       await this.client.mkdir(uri);
     } catch (error) {
@@ -475,6 +486,11 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
   }
 
   private async tryRemove(uri: string): Promise<void> {
+    if (!(await this.pathExists(uri))) {
+      this.logger?.debug?.(`openviking remove skipped (missing path): ${uri}`);
+      return;
+    }
+
     try {
       await this.client.remove(uri, true);
     } catch (error) {
@@ -484,6 +500,22 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
       }
       throw error;
     }
+  }
+
+  private async pathExists(uri: string): Promise<boolean> {
+    try {
+      await this.client.stat(uri);
+      return true;
+    } catch (error) {
+      if (this.shouldIgnoreMissingPathError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private normalizeUri(uri: string): string {
+    return uri.replace(/\/+$/, "");
   }
 
   private shouldIgnoreMissingPathError(error: unknown): boolean {

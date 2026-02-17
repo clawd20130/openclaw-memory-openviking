@@ -113,6 +113,41 @@ describe("OpenVikingClient", () => {
     );
   });
 
+  it("should call stat endpoint with uri query", async () => {
+    let calledUrl = "";
+    let calledInit: RequestInit | undefined;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      calledUrl = String(url);
+      calledInit = init;
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          result: {
+            uri: "viking://resources/openclaw/main/memory-sync/root"
+          }
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }) as unknown) as typeof fetch;
+
+    const client = new OpenVikingClient({
+      baseUrl: "http://127.0.0.1:1933"
+    });
+
+    const stat = await client.stat("viking://resources/openclaw/main/memory-sync/root");
+
+    assert.strictEqual(
+      calledUrl,
+      "http://127.0.0.1:1933/api/v1/fs/stat?uri=viking%3A%2F%2Fresources%2Fopenclaw%2Fmain%2Fmemory-sync%2Froot"
+    );
+    assert.strictEqual(calledInit?.method, "GET");
+    assert.strictEqual(stat.uri, "viking://resources/openclaw/main/memory-sync/root");
+  });
+
   it("should throw OpenVikingHttpError on wrapped error response", async () => {
     globalThis.fetch = ((async () => {
       return new Response(
