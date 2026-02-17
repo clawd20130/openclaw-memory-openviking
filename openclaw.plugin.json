@@ -1,0 +1,156 @@
+{
+  "id": "openclaw-memory-openviking",
+  "kind": "memory",
+  "uiHints": {
+    "baseUrl": {
+      "label": "OpenViking Base URL",
+      "placeholder": "http://127.0.0.1:1933",
+      "help": "OpenViking HTTP 服务地址"
+    },
+    "apiKey": {
+      "label": "API Key",
+      "sensitive": true,
+      "help": "可选：OpenViking API Key"
+    },
+    "uriBase": {
+      "label": "URI Base",
+      "advanced": true,
+      "placeholder": "viking://resources/openclaw/{agentId}",
+      "help": "资源根路径，支持 {agentId} 占位符"
+    },
+    "tieredLoading": {
+      "label": "Tiered Loading",
+      "advanced": true
+    },
+    "sync.interval": {
+      "label": "Sync Interval",
+      "advanced": true,
+      "placeholder": "5m"
+    },
+    "sync.onBoot": {
+      "label": "Sync On Boot",
+      "advanced": true
+    },
+    "sync.waitForProcessing": {
+      "label": "Wait For Processing",
+      "advanced": true
+    },
+    "search.mode": {
+      "label": "Search Mode",
+      "advanced": true
+    },
+    "search.targetUri": {
+      "label": "Target URI",
+      "advanced": true
+    },
+    "server.enabled": {
+      "label": "Auto-start OpenViking",
+      "advanced": true
+    },
+    "server.venvPath": {
+      "label": "OpenViking Venv Path",
+      "advanced": true,
+      "placeholder": "/path/to/venv"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["baseUrl"],
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "uriBase": {
+        "type": "string"
+      },
+      "tieredLoading": {
+        "type": "boolean"
+      },
+      "mappings": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "sync": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "interval": {
+            "type": "string"
+          },
+          "onBoot": {
+            "type": "boolean"
+          },
+          "waitForProcessing": {
+            "type": "boolean"
+          },
+          "waitTimeoutSec": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "search": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["find", "search"]
+          },
+          "defaultLimit": {
+            "type": "number",
+            "minimum": 1
+          },
+          "scoreThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "targetUri": {
+            "type": "string"
+          }
+        }
+      },
+      "server": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["enabled", "venvPath"],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "venvPath": {
+            "type": "string"
+          },
+          "dataDir": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "startupTimeoutMs": {
+            "type": "number",
+            "minimum": 1000
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,69 +1,75 @@
 # OpenClaw Memory Plugin for OpenViking
 
-将 [OpenViking](https://github.com/volcengine/OpenViking) 作为 OpenClaw 的记忆后端，提供分层上下文管理和自我进化能力。
+把 OpenViking 作为 OpenClaw 的 memory 插件，提供 `memory_search` 和 `memory_get` 两个工具。
 
-## 特性
+## 当前状态
 
-- 🔗 **无缝集成** - 实现 OpenClaw `MemorySearchManager` 接口，零成本切换
-- 📚 **分层加载** - L0/L1/L2 三层内容，按需加载节省 token
-- 📁 **文件系统范式** - 利用 OpenViking 的目录层级提升检索效果
-- 🔄 **自我进化** - 自动压缩对话、提取长期记忆
-- 🔍 **混合检索** - 语义搜索 + 目录结构 + 文件名匹配
+- 插件 id：`openclaw-memory-openviking`
+- npm 包名：`@kevinzhow/openclaw-memory-openviking`
+- 兼容 OpenClaw：`>=2026.2.15`
+- 开发默认 OpenViking 地址：`http://127.0.0.1:1933`
+
+## 功能
+
+- 使用 OpenViking 检索：`/api/v1/search/find` 或 `/api/v1/search/search`
+- 使用 OpenViking 读取：`/api/v1/content/read`、`/api/v1/content/overview`
+- 支持本地记忆文件同步到 OpenViking：`/api/v1/resources` + `/api/v1/fs/mv`
+- OpenViking 不可读时，`memory_get` 自动回退本地文件读取
 
 ## 安装
 
-```bash
-# 方法1: 全局安装
-npm install -g @kevinzhow/openclaw-memory-openviking
+### 方式 1：npm
 
-# 方法2: 本地路径加载
-git clone https://github.com/kevinzhow/openclaw-memory-openviking.git
-cd openclaw-memory-openviking
-npm install && npm run build
+```bash
+npm install @kevinzhow/openclaw-memory-openviking
 ```
 
-## 配置
+### 方式 2：本地开发
+
+```bash
+git clone https://github.com/kevinzhow/openclaw-memory-openviking.git
+cd openclaw-memory-openviking
+npm install
+npm run build
+```
+
+## OpenClaw 配置
 
 ```json5
-// openclaw.config.json5
 {
   plugins: {
     enabled: true,
     slots: {
-      memory: "openviking"  // 切换到 OpenViking 后端
+      memory: "openclaw-memory-openviking"
     },
     load: {
-      paths: ["~/.openclaw/plugins"]  // 如果使用本地路径
+      // 本地开发时可用
+      paths: ["/path/to/openviking-memory-plugin"]
     },
     entries: {
-      openviking: {
+      "openclaw-memory-openviking": {
         enabled: true,
         config: {
-          // OpenViking 服务地址
           baseUrl: "http://127.0.0.1:1933",
-          
-          // 可选: API Key
-          apiKey: "your-api-key",
-          
-          // 路径映射规则
-          mappings: {
-            "MEMORY.md": "viking://user/memories/longterm",
-            "SOUL.md": "viking://user/preferences/persona",
-            "USER.md": "viking://user/preferences/profile",
-            "AGENTS.md": "viking://agent/config/agents",
-            "memory/*.md": "viking://user/memories/daily/{date}",
-            "skills/*/SKILL.md": "viking://agent/skills/{name}"
-          },
-          
-          // 分层策略
+          apiKey: "optional-api-key",
+
+          // 可选：默认 viking://resources/openclaw/{agentId}
+          uriBase: "viking://resources/openclaw/{agentId}",
+
           tieredLoading: true,
-          autoLayering: true,
-          
-          // 同步配置
+
           sync: {
             interval: "5m",
             onBoot: true,
-            debounceMs: 5000
+            waitForProcessing: false,
+            waitTimeoutSec: 60
+          },
+
+          search: {
+            mode: "find", // "find" | "search"
+            defaultLimit: 6,
+            scoreThreshold: 0,
+            targetUri: "viking://resources/openclaw/main/memory-sync"
           }
         }
       }
@@ -72,90 +78,91 @@ npm install && npm run build
 }
 ```
 
-## 先决条件
+## 配置项说明
 
-1. **部署 OpenViking 服务**
-   ```bash
-   git clone https://github.com/volcengine/OpenViking.git
-   cd OpenViking
-   # 按照官方文档部署服务
-   docker-compose up -d
-   ```
+- `baseUrl`：OpenViking HTTP 地址，必填。
+- `apiKey`：可选，若服务开启鉴权可填写。
+- `uriBase`：资源根路径，支持 `{agentId}` 占位符。
+- `tieredLoading`：`true` 时，`memory_get` 在未指定行号优先走 overview。
+- `sync.interval`：周期同步间隔（例如 `30s`、`5m`、`1h`、`1d`）。
+- `sync.onBoot`：插件加载后是否先做一次同步。
+- `sync.waitForProcessing`：同步后是否等待 OpenViking 队列完成。
+- `sync.waitTimeoutSec`：等待超时时间（秒）。
+- `search.mode`：`find`（默认）或 `search`（带 session 语义）。
+- `search.defaultLimit`：默认返回条数。
+- `search.scoreThreshold`：最小分数阈值。
+- `search.targetUri`：限制检索范围。
+- `server.enabled`：是否由插件自动拉起 OpenViking。
+- `server.venvPath`：`server.enabled=true` 时必填。
 
-2. **确保 OpenClaw 版本支持插件**
-   - 需要 OpenClaw >= 0.x（支持 memory slot 的版本）
+## 默认路径映射
 
-## 路径映射
+默认以 `viking://resources/openclaw/{agentId}/memory-sync` 为根，内置映射包括：
 
-| 本地文件 | OpenViking URI |
-|---------|---------------|
-| `MEMORY.md` | `viking://user/memories/longterm` |
-| `memory/2025-06-18.md` | `viking://user/memories/daily/2025-06-18` |
-| `SOUL.md` | `viking://user/preferences/persona` |
-| `USER.md` | `viking://user/preferences/profile` |
-| `AGENTS.md` | `viking://agent/config/agents` |
-| `skills/*/SKILL.md` | `viking://agent/skills/{name}` |
+- `MEMORY.md` -> `.../root/MEMORY`
+- `SOUL.md` -> `.../root/SOUL`
+- `USER.md` -> `.../root/USER`
+- `AGENTS.md` -> `.../root/AGENTS`
+- `TOOLS.md` -> `.../root/TOOLS`
+- `IDENTITY.md` -> `.../root/IDENTITY`
+- `BOOTSTRAP.md` -> `.../root/BOOTSTRAP`
+- `memory/YYYY-MM-DD.md` -> `.../memory/{date}`
+- `skills/*/SKILL.md` -> `.../skills/{name}/SKILL`
+- 其他文件 -> `.../files/{path}`
 
-## 工作原理
+## 验证
 
+先确认 OpenViking 服务可用：
+
+```bash
+curl -sS http://127.0.0.1:1933/health
 ```
-┌─────────────────────────────────────────┐
-│         OpenClaw Session                │
-│   memory_search / memory_get            │
-└─────────────┬───────────────────────────┘
-              │
-┌─────────────▼───────────────────────────┐
-│   OpenVikingMemoryManager (本插件)       │
-│   - 路径 ↔ URI 映射                      │
-│   - HTTP 调用 OpenViking API            │
-└─────────────┬───────────────────────────┘
-              │
-┌─────────────▼───────────────────────────┐
-│   OpenViking Server                     │
-│   - 分层存储 (L0/L1/L2)                 │
-│   - 混合检索                            │
-│   - 自我进化                            │
-└─────────────────────────────────────────┘
+
+确认 OpenClaw 成功加载插件：
+
+```bash
+openclaw plugins info openclaw-memory-openviking --json
 ```
+
+输出里应包含：
+
+- `"status": "loaded"`
+- `"toolNames": ["memory_search", "memory_get"]`
 
 ## 开发
 
 ```bash
-# 克隆仓库
-git clone https://github.com/kevinzhow/openclaw-memory-openviking.git
-cd openclaw-memory-openviking
-
-# 安装依赖
-npm install
-
-# 开发模式
-npm run dev
-
-# 构建
 npm run build
-
-# 类型检查
-npm run typecheck
+npm test
 ```
 
-## 与 QMD 的对比
+测试包含：
 
-| 特性 | QMD | OpenViking (本插件) |
-|-----|-----|-------------------|
-| 部署方式 | 子进程 CLI | HTTP 服务 |
-| 存储模型 | 平面向量索引 | 文件系统层级 |
-| 分层加载 | ❌ | ✅ L0/L1/L2 |
-| 目录感知 | 弱 | 强 |
-| 自我进化 | ❌ | ✅ |
-| 可视化 | ❌ | ✅ 检索轨迹 |
-| 依赖 | Bun + SQLite | Docker + Python |
+- `tests/client.test.ts`
+- `tests/mapper.test.ts`
+- `tests/plugin.test.ts`
+
+## 常见问题
+
+### 1) plugin id mismatch
+
+请确保配置里的 slot/entry 使用同一个 id：
+
+- `plugins.slots.memory = "openclaw-memory-openviking"`
+- `plugins.entries["openclaw-memory-openviking"]`
+
+### 2) `baseUrl is required`
+
+未配置 `plugins.entries["openclaw-memory-openviking"].config.baseUrl`。
+
+### 3) `connection refused` 到 1933
+
+OpenViking 服务未启动，或端口/地址不匹配。
+
+### 4) `memory_get` 返回本地文件不存在
+
+调用上下文缺少正确 `workspaceDir` 时会回退到插件进程当前目录读取本地文件。请在 OpenClaw 正常 agent/session 上下文里调用，或确保读取路径在当前工作目录存在。
 
 ## 许可证
 
-MIT © Kevin Zhow
-
-## 相关链接
-
-- [OpenClaw](https://github.com/openclaw/openclaw)
-- [OpenViking](https://github.com/volcengine/OpenViking)
-- [QMD](https://github.com/tobi/qmd)
+MIT

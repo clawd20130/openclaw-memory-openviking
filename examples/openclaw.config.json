@@ -1,13 +1,13 @@
 {
   "plugins": {
     "slots": {
-      "memory": "openviking"
+      "memory": "openclaw-memory-openviking"
     },
     "load": {
       "paths": ["~/.openclaw/plugins"]
     },
     "entries": {
-      "openviking": {
+      "openclaw-memory-openviking": {
         "enabled": true,
         "config": {
           "baseUrl": "http://127.0.0.1:1933",

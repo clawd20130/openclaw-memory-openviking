@@ -1,20 +1,20 @@
 /**
- * OpenViking Memory Manager - 实现 OpenClaw MemorySearchManager 接口
+ * OpenViking Memory Manager
  */
 
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
+import { OpenVikingClient, OpenVikingHttpError } from "./client.js";
+import { PathMapper } from "./mapper.js";
 import type {
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
   MemorySearchManager,
   MemorySearchResult,
-  MemoryProviderStatus,
-  MemorySyncProgressUpdate,
-  MemoryEmbeddingProbeResult,
-  MemorySource
-} from "@kevinzhow/openclaw-plugin-sdk";
-import type { OpenVikingPluginConfig } from "./types.js";
-import { OpenVikingClient } from "./client.js";
-import { PathMapper } from "./mapper.js";
-import { promises as fs } from "fs";
-import * as path from "path";
+  MemorySource,
+  MemorySyncProgressUpdate
+} from "./memory.js";
+import type { OpenVikingMatchedContext, OpenVikingPluginConfig } from "./types.js";
 
 export interface OpenVikingMemoryManagerOptions {
   config: OpenVikingPluginConfig;
@@ -29,12 +29,12 @@ export interface OpenVikingMemoryManagerOptions {
 }
 
 export class OpenVikingMemoryManager implements MemorySearchManager {
-  private client: OpenVikingClient;
-  private mapper: PathMapper;
-  private config: OpenVikingPluginConfig;
-  private workspaceDir: string;
-  private agentId: string;
-  private logger: OpenVikingMemoryManagerOptions["logger"];
+  private readonly client: OpenVikingClient;
+  private readonly mapper: PathMapper;
+  private readonly config: OpenVikingPluginConfig;
+  private readonly workspaceDir: string;
+  private readonly agentId: string;
+  private readonly logger?: OpenVikingMemoryManagerOptions["logger"];
   private closed = false;
   private lastSyncAt?: Date;
 
@@ -43,305 +43,174 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     this.workspaceDir = options.workspaceDir;
     this.agentId = options.agentId;
     this.logger = options.logger;
-    
     this.client = new OpenVikingClient({
       baseUrl: options.config.baseUrl,
       apiKey: options.config.apiKey,
       timeoutMs: 30000
     });
-    
-    this.mapper = new PathMapper(options.config.mappings);
+    this.mapper = new PathMapper({
+      mappings: options.config.mappings,
+      uriBase: options.config.uriBase,
+      agentId: options.agentId
+    });
   }
 
-  /**
-   * 搜索记忆
-   */
   async search(
     query: string,
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string }
   ): Promise<MemorySearchResult[]> {
-    if (this.closed) {
-      throw new Error("OpenVikingMemoryManager is closed");
+    this.ensureOpen();
+    const cleaned = query.trim();
+    if (!cleaned) {
+      return [];
     }
 
-    this.logger?.debug?.(`Searching: ${query}`);
+    const limit = Math.max(1, opts?.maxResults ?? this.config.search?.defaultLimit ?? 6);
+    const threshold = opts?.minScore ?? this.config.search?.scoreThreshold ?? 0;
+    const mode = this.config.search?.mode ?? "find";
+    const targetUri = this.config.search?.targetUri ?? this.mapper.getRootPrefix();
 
-    try {
-      const results = await this.client.search({
-        query,
-        limit: opts?.maxResults ?? this.config.search?.defaultLimit ?? 5,
-        threshold: opts?.minScore ?? 0.5,
-        mode: this.config.search?.mode ?? "hybrid"
-      });
+    this.logger?.debug?.(
+      `openviking search mode=${mode}, query="${cleaned}", target=${targetUri}, limit=${limit}`
+    );
 
-      // 转换为 OpenClaw 格式
-      return results.map((r) => ({
-        path: this.mapper.fromVikingUri(r.uri),
-        startLine: r.startLine ?? 1,
-        endLine: r.endLine ?? 1,
-        score: r.score,
-        snippet: r.content,
-        source: this.inferSource(r.uri),
-        citation: `${this.mapper.fromVikingUri(r.uri)}#${r.startLine ?? 1}`
-      }));
-    } catch (error) {
-      this.logger?.error(`Search failed: ${error}`);
-      throw error;
-    }
+    const result =
+      mode === "search"
+        ? await this.client.search({
+            query: cleaned,
+            limit,
+            score_threshold: threshold,
+            target_uri: targetUri,
+            session_id: opts?.sessionKey
+          })
+        : await this.client.find({
+            query: cleaned,
+            limit,
+            score_threshold: threshold,
+            target_uri: targetUri
+          });
+
+    const rows: OpenVikingMatchedContext[] = [
+      ...(result.memories ?? []),
+      ...(result.resources ?? []),
+      ...(result.skills ?? [])
+    ];
+
+    return rows
+      .map((entry) => this.toMemorySearchResult(entry))
+      .filter((entry) => entry.score >= threshold)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 
-  /**
-   * 读取文件内容
-   */
   async readFile(params: {
     relPath: string;
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
-    if (this.closed) {
-      throw new Error("OpenVikingMemoryManager is closed");
-    }
+    this.ensureOpen();
+    const relPath = this.ensureSafeRelPath(params.relPath);
+    const rootUri = this.mapper.toVikingUri(relPath);
+    const contentUri = this.mapper.toContentUri(relPath);
 
-    const uri = this.mapper.toVikingUri(params.relPath);
-    this.logger?.debug?.(`Reading file: ${params.relPath} -> ${uri}`);
+    this.logger?.debug?.(
+      `openviking read relPath=${relPath}, rootUri=${rootUri}, contentUri=${contentUri}`
+    );
 
     try {
-      // 决定读取哪个层级
-      let layer: "L0" | "L1" | "L2" | undefined;
-      if (this.config.tieredLoading !== false) {
-        // 默认读取 L1 (概览层)，如果需要完整内容再读 L2
-        layer = params.lines && params.lines > 50 ? "L2" : "L1";
-      }
+      let text = "";
+      const requiresExactLines = params.from !== undefined || params.lines !== undefined;
 
-      const doc = await this.client.getDocument(uri, layer);
-
-      let text: string;
-      if (layer === "L0") {
-        text = doc.layers.L0 ?? doc.content;
-      } else if (layer === "L1") {
-        text = doc.layers.L1 ?? doc.content;
+      if (requiresExactLines || this.config.tieredLoading === false) {
+        text = await this.client.read(contentUri);
       } else {
-        text = doc.content;
+        try {
+          text = await this.client.overview(rootUri);
+        } catch {
+          text = await this.client.read(contentUri);
+        }
       }
 
-      // 处理行范围
-      if (params.from || params.lines) {
-        const allLines = text.split("\n");
-        const start = (params.from ?? 1) - 1;
-        const end = params.lines
-          ? Math.min(start + params.lines, allLines.length)
-          : allLines.length;
-        text = allLines.slice(start, end).join("\n");
-      }
-
-      return { text, path: params.relPath };
+      return {
+        path: relPath,
+        text: this.sliceLines(text, params.from, params.lines)
+      };
     } catch (error) {
-      // 如果 OpenViking 中没有，尝试从本地文件读取（兼容性）
-      this.logger?.warn?.(`OpenViking miss: ${uri}, trying local file`);
-      return this.readLocalFile(params);
+      this.logger?.warn(`OpenViking read failed for ${relPath}, fallback to local file: ${error}`);
+      return await this.readLocalFile({
+        relPath,
+        from: params.from,
+        lines: params.lines
+      });
     }
   }
 
-  /**
-   * 从本地文件读取（fallback）
-   */
-  private async readLocalFile(params: {
-    relPath: string;
-    from?: number;
-    lines?: number;
-  }): Promise<{ text: string; path: string }> {
-    const fullPath = path.join(this.workspaceDir, params.relPath);
-    
-    try {
-      const content = await fs.readFile(fullPath, "utf-8");
-      
-      let text = content;
-      if (params.from || params.lines) {
-        const allLines = text.split("\n");
-        const start = (params.from ?? 1) - 1;
-        const end = params.lines
-          ? Math.min(start + params.lines, allLines.length)
-          : allLines.length;
-        text = allLines.slice(start, end).join("\n");
-      }
-
-      return { text, path: params.relPath };
-    } catch {
-      throw new Error(`File not found: ${params.relPath}`);
-    }
-  }
-
-  /**
-   * 获取状态
-   */
   status(): MemoryProviderStatus {
-    const status: MemoryProviderStatus = {
-      backend: "openviking" as any,  // 扩展类型
+    return {
+      backend: "builtin",
       provider: "openviking",
-      files: -1,
-      chunks: -1,
+      model: this.config.search?.mode ?? "find",
+      workspaceDir: this.workspaceDir,
       custom: {
         baseUrl: this.config.baseUrl,
-        tieredLoading: this.config.tieredLoading ?? true,
-        autoLayering: this.config.autoLayering ?? true,
-        lastSyncAt: this.lastSyncAt?.toISOString(),
-        workspaceDir: this.workspaceDir
+        agentId: this.agentId,
+        rootPrefix: this.mapper.getRootPrefix(),
+        tieredLoading: this.config.tieredLoading !== false,
+        lastSyncAt: this.lastSyncAt?.toISOString()
       }
     };
-
-    return status;
   }
 
-  /**
-   * 同步文件到 OpenViking
-   */
   async sync(params?: {
     reason?: string;
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    if (this.closed) return;
+    this.ensureOpen();
 
-    this.logger?.info(`Syncing to OpenViking: ${params?.reason ?? "scheduled"}`);
-
-    // 扫描需要同步的文件
-    const filesToSync = await this.scanFiles();
-    const total = filesToSync.length;
-
-    params?.progress?.({ completed: 0, total, label: "Scanning files..." });
-
+    const files = await this.scanFiles();
+    const total = files.length;
     let completed = 0;
-    for (const filePath of filesToSync) {
+
+    this.logger?.info(`openviking sync started: reason=${params?.reason ?? "manual"}, files=${total}`);
+    params?.progress?.({ completed, total, label: "Scanning memory files..." });
+
+    for (const relPath of files) {
       try {
-        await this.syncFile(filePath);
-        completed++;
+        await this.syncFile(relPath);
+      } catch (error) {
+        this.logger?.error(`Failed to sync ${relPath}: ${String(error)}`);
+      } finally {
+        completed += 1;
         params?.progress?.({
           completed,
           total,
-          label: `Syncing ${path.basename(filePath)}...`
+          label: `Syncing ${path.basename(relPath)}`
         });
-      } catch (error) {
-        this.logger?.error(`Failed to sync ${filePath}: ${error}`);
       }
+    }
+
+    if (this.config.sync?.waitForProcessing) {
+      const timeout = this.config.sync.waitTimeoutSec;
+      await this.client.waitProcessed(timeout);
     }
 
     this.lastSyncAt = new Date();
-    this.logger?.info(`Sync completed: ${completed}/${total} files`);
-    params?.progress?.({ completed, total, label: "Sync completed" });
+    params?.progress?.({ completed: total, total, label: "Sync completed" });
+    this.logger?.info(`openviking sync finished: ${total} files`);
   }
 
-  /**
-   * 扫描需要同步的文件
-   */
-  private async scanFiles(): Promise<string[]> {
-    const files: string[] = [];
-    
-    // 扫描 memory 目录
-    const memoryDir = path.join(this.workspaceDir, "memory");
-    try {
-      const entries = await fs.readdir(memoryDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isFile() && entry.name.endsWith(".md")) {
-          files.push(`memory/${entry.name}`);
-        }
-      }
-    } catch {
-      // 目录不存在，忽略
-    }
-
-    // 扫描根目录的关键文件
-    const rootFiles = ["MEMORY.md", "SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md"];
-    for (const file of rootFiles) {
-      try {
-        await fs.access(path.join(this.workspaceDir, file));
-        files.push(file);
-      } catch {
-        // 文件不存在，忽略
-      }
-    }
-
-    // 扫描 skills
-    const skillsDir = path.join(this.workspaceDir, "skills");
-    try {
-      const skillDirs = await fs.readdir(skillsDir, { withFileTypes: true });
-      for (const dir of skillDirs) {
-        if (dir.isDirectory()) {
-          const skillFile = path.join("skills", dir.name, "SKILL.md");
-          try {
-            await fs.access(path.join(this.workspaceDir, skillFile));
-            files.push(skillFile);
-          } catch {
-            // 忽略
-          }
-        }
-      }
-    } catch {
-      // 目录不存在，忽略
-    }
-
-    return files;
-  }
-
-  /**
-   * 同步单个文件
-   */
-  private async syncFile(relPath: string): Promise<void> {
-    const fullPath = path.join(this.workspaceDir, relPath);
-    const content = await fs.readFile(fullPath, "utf-8");
-    const uri = this.mapper.toVikingUri(relPath);
-
-    // 计算分层内容
-    const layers = this.config.autoLayering !== false
-      ? this.generateLayers(content)
-      : { L2: content };
-
-    await this.client.upsertDocument({
-      uri,
-      content,
-      layers,
-      metadata: {
-        localPath: relPath,
-        syncedAt: new Date().toISOString(),
-        agentId: this.agentId
-      }
-    });
-  }
-
-  /**
-   * 生成分层内容
-   */
-  private generateLayers(content: string): { L0?: string; L1?: string; L2: string } {
-    const lines = content.split("\n");
-    const L2 = content;
-
-    // L1: 取前 2000 个字符或前 50 行
-    let L1 = content.slice(0, 2000);
-    if (lines.length > 50) {
-      L1 = lines.slice(0, 50).join("\n");
-    }
-
-    // L0: 提取标题或生成一句话摘要
-    let L0 = "";
-    const titleMatch = content.match(/^#\s+(.+)$/m);
-    if (titleMatch) {
-      L0 = titleMatch[1].slice(0, 100);
-    } else {
-      L0 = content.slice(0, 100).replace(/\n/g, " ") + "...";
-    }
-
-    return { L0, L1, L2 };
-  }
-
-  /**
-   * 探测 Embedding 可用性
-   */
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
     try {
       const health = await this.client.health();
-      return {
-        ok: health.status === "healthy",
-        error: health.status === "healthy" ? undefined : `Status: ${health.status}`
-      };
+      if (health.status !== "ok") {
+        return { ok: false, error: `health=${health.status}` };
+      }
+      const system = await this.client.systemStatus();
+      if (!system.initialized) {
+        return { ok: false, error: "OpenViking is not initialized" };
+      }
+      return { ok: true };
     } catch (error) {
       return {
         ok: false,
@@ -350,27 +219,179 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     }
   }
 
-  /**
-   * 探测向量搜索可用性
-   */
   async probeVectorAvailability(): Promise<boolean> {
-    const health = await this.client.health();
-    return health.status === "healthy";
+    try {
+      const system = await this.client.systemStatus();
+      return Boolean(system.initialized);
+    } catch {
+      return false;
+    }
   }
 
-  /**
-   * 关闭管理器
-   */
   async close(): Promise<void> {
     this.closed = true;
-    this.logger?.info("OpenVikingMemoryManager closed");
+    this.logger?.info("openviking manager closed");
   }
 
-  /**
-   * 推断记忆来源
-   */
-  private inferSource(uri: string): MemorySource {
-    if (uri.includes("/sessions/")) return "sessions";
+  private ensureOpen(): void {
+    if (this.closed) {
+      throw new Error("OpenVikingMemoryManager is closed");
+    }
+  }
+
+  private toMemorySearchResult(entry: OpenVikingMatchedContext): MemorySearchResult {
+    const pathHint = this.mapper.fromVikingUri(entry.uri);
+    const snippet = (entry.abstract?.trim() || entry.match_reason?.trim() || entry.uri).slice(0, 1200);
+    return {
+      path: pathHint,
+      startLine: 1,
+      endLine: 1,
+      score: Number.isFinite(entry.score) ? entry.score : 0,
+      snippet,
+      source: this.inferSource(entry.uri, entry.context_type),
+      citation: `${pathHint}#L1`
+    };
+  }
+
+  private inferSource(uri: string, contextType: string): MemorySource {
+    if (uri.includes("viking://session/")) {
+      return "sessions";
+    }
+    if (contextType === "memory") {
+      return "memory";
+    }
     return "memory";
+  }
+
+  private async readLocalFile(params: {
+    relPath: string;
+    from?: number;
+    lines?: number;
+  }): Promise<{ text: string; path: string }> {
+    const fullPath = path.join(this.workspaceDir, params.relPath);
+    const content = await fs.readFile(fullPath, "utf-8");
+    return {
+      path: params.relPath,
+      text: this.sliceLines(content, params.from, params.lines)
+    };
+  }
+
+  private sliceLines(content: string, from?: number, lines?: number): string {
+    if (from === undefined && lines === undefined) {
+      return content;
+    }
+    const allLines = content.split("\n");
+    const start = Math.max(0, (from ?? 1) - 1);
+    const end =
+      lines === undefined ? allLines.length : Math.max(start, Math.min(allLines.length, start + lines));
+    return allLines.slice(start, end).join("\n");
+  }
+
+  private ensureSafeRelPath(input: string): string {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      throw new Error("path required");
+    }
+    const normalized = trimmed.replace(/\\/g, "/").replace(/^\/+/, "");
+    const safe = path.posix.normalize(normalized);
+    if (safe.startsWith("../") || safe.includes("/../") || safe === "..") {
+      throw new Error(`invalid path: ${input}`);
+    }
+    return safe;
+  }
+
+  private async scanFiles(): Promise<string[]> {
+    const files = new Set<string>();
+
+    const addIfExists = async (relPath: string): Promise<void> => {
+      try {
+        await fs.access(path.join(this.workspaceDir, relPath));
+        files.add(relPath);
+      } catch {
+        // ignore missing file
+      }
+    };
+
+    // 根目录关键记忆文件
+    const rootFiles = [
+      "MEMORY.md",
+      "memory.md",
+      "SOUL.md",
+      "USER.md",
+      "AGENTS.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "BOOTSTRAP.md"
+    ];
+    for (const relPath of rootFiles) {
+      await addIfExists(relPath);
+    }
+
+    // memory/*.md
+    const memoryDir = path.join(this.workspaceDir, "memory");
+    try {
+      const entries = await fs.readdir(memoryDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith(".md")) {
+          files.add(`memory/${entry.name}`);
+        }
+      }
+    } catch {
+      // ignore missing directory
+    }
+
+    // skills/*/SKILL.md
+    const skillsDir = path.join(this.workspaceDir, "skills");
+    try {
+      const skillDirs = await fs.readdir(skillsDir, { withFileTypes: true });
+      for (const entry of skillDirs) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        const skillPath = path.join("skills", entry.name, "SKILL.md").replace(/\\/g, "/");
+        await addIfExists(skillPath);
+      }
+    } catch {
+      // ignore missing directory
+    }
+
+    return [...files].sort((a, b) => a.localeCompare(b));
+  }
+
+  private async syncFile(relPath: string): Promise<void> {
+    const safeRelPath = this.ensureSafeRelPath(relPath);
+    const fullPath = path.join(this.workspaceDir, safeRelPath);
+    const desiredRootUri = this.mapper.toVikingUri(safeRelPath);
+    const stagingUri = this.mapper.getStagingUri();
+
+    this.logger?.debug?.(
+      `openviking sync file relPath=${safeRelPath}, staging=${stagingUri}, target=${desiredRootUri}`
+    );
+
+    const importResult = await this.client.addResource({
+      path: fullPath,
+      target: stagingUri,
+      reason: `OpenClaw memory sync: ${safeRelPath}`,
+      wait: false
+    });
+
+    const importedRoot = importResult.root_uri;
+    if (!importedRoot) {
+      throw new Error(`OpenViking import result missing root_uri: ${safeRelPath}`);
+    }
+
+    await this.tryRemove(desiredRootUri);
+    await this.client.move(importedRoot, desiredRootUri);
+  }
+
+  private async tryRemove(uri: string): Promise<void> {
+    try {
+      await this.client.remove(uri, true);
+    } catch (error) {
+      if (error instanceof OpenVikingHttpError && error.status === 404) {
+        return;
+      }
+      throw error;
+    }
   }
 }

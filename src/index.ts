@@ -1,243 +1,473 @@
 /**
  * OpenViking Memory Plugin for OpenClaw
- * 
- * 将 OpenViking 作为记忆后端，提供分层上下文管理和自我进化能力。
  */
 
-// Note: @openclaw/plugin-sdk is a peer dependency
-// The actual package name may vary based on OpenClaw SDK release
-import type { 
-  OpenClawPluginDefinition,
-  OpenClawPluginApi
-} from "@kevinzhow/openclaw-plugin-sdk";
-import type { OpenVikingPluginConfig } from "./types.js";
+import { Type } from "@sinclair/typebox";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { OpenVikingMemoryManager } from "./manager.js";
 import { OpenVikingServerManager } from "./server.js";
+import type { MemorySearchManager } from "./memory.js";
+import type { OpenVikingPluginConfig } from "./types.js";
 
-// 重新导出类型
 export type { OpenVikingPluginConfig } from "./types.js";
+export type {
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
+  MemorySearchManager,
+  MemorySearchResult
+} from "./memory.js";
 export { OpenVikingMemoryManager } from "./manager.js";
 export { OpenVikingClient } from "./client.js";
 export { PathMapper } from "./mapper.js";
 export { OpenVikingServerManager } from "./server.js";
 
-/**
- * 配置校验函数
- */
-function validateConfig(config: unknown): { ok: true; data: OpenVikingPluginConfig } | { ok: false; errors: string[] } {
-  if (typeof config !== "object" || config === null) {
-    return { ok: false, errors: ["Config must be an object"] };
+const MemorySearchSchema = Type.Object({
+  query: Type.String(),
+  maxResults: Type.Optional(Type.Number()),
+  minScore: Type.Optional(Type.Number())
+});
+
+const MemoryGetSchema = Type.Object({
+  path: Type.String(),
+  from: Type.Optional(Type.Number()),
+  lines: Type.Optional(Type.Number())
+});
+
+type PluginToolContext = {
+  workspaceDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+};
+
+const configSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["baseUrl"],
+  properties: {
+    baseUrl: { type: "string" },
+    apiKey: { type: "string" },
+    uriBase: { type: "string" },
+    tieredLoading: { type: "boolean" },
+    mappings: {
+      type: "object",
+      additionalProperties: { type: "string" }
+    },
+    sync: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        interval: { type: "string" },
+        onBoot: { type: "boolean" },
+        waitForProcessing: { type: "boolean" },
+        waitTimeoutSec: { type: "number", minimum: 0 }
+      }
+    },
+    search: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mode: { type: "string", enum: ["find", "search"] },
+        defaultLimit: { type: "number", minimum: 1 },
+        scoreThreshold: { type: "number", minimum: 0, maximum: 1 },
+        targetUri: { type: "string" }
+      }
+    },
+    server: {
+      type: "object",
+      additionalProperties: false,
+      required: ["enabled", "venvPath"],
+      properties: {
+        enabled: { type: "boolean" },
+        venvPath: { type: "string" },
+        dataDir: { type: "string" },
+        host: { type: "string" },
+        port: { type: "number", minimum: 1, maximum: 65535 },
+        startupTimeoutMs: { type: "number", minimum: 1000 },
+        env: { type: "object", additionalProperties: { type: "string" } }
+      }
+    }
   }
+} as const;
 
-  const cfg = config as Record<string, unknown>;
-  const errors: string[] = [];
-
-  // 检查必需字段
-  if (!cfg.baseUrl) {
-    errors.push("Missing required field: baseUrl");
-  } else if (typeof cfg.baseUrl !== "string") {
-    errors.push("baseUrl must be a string");
-  }
-
-  // 检查可选字段类型
-  if (cfg.apiKey !== undefined && typeof cfg.apiKey !== "string") {
-    errors.push("apiKey must be a string");
-  }
-
-  if (cfg.tieredLoading !== undefined && typeof cfg.tieredLoading !== "boolean") {
-    errors.push("tieredLoading must be a boolean");
-  }
-
-  if (cfg.autoLayering !== undefined && typeof cfg.autoLayering !== "boolean") {
-    errors.push("autoLayering must be a boolean");
-  }
-
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-
-  return { ok: true, data: cfg as OpenVikingPluginConfig };
-}
-
-/**
- * 插件定义
- */
-const plugin: OpenClawPluginDefinition = {
-  id: "openviking",
+const plugin = {
+  id: "openclaw-memory-openviking",
   name: "OpenViking Memory",
-  description: "OpenViking context database as memory backend for OpenClaw",
+  description: "OpenViking-backed memory_search/memory_get tools for OpenClaw",
   version: "0.1.0",
-  kind: "memory",  // 声明为 memory 插件
-
-  /**
-   * 配置模式定义
-   */
+  kind: "memory",
   configSchema: {
-    safeParse: validateConfig,
+    jsonSchema: configSchema,
     uiHints: {
       baseUrl: {
         label: "OpenViking Base URL",
-        help: "HTTP endpoint of OpenViking service (e.g., http://localhost:8080). If auto-start is enabled, this is where the server will be available.",
-        placeholder: "http://127.0.0.1:1933"
+        placeholder: "http://127.0.0.1:1933",
+        help: "OpenViking HTTP 服务地址"
       },
       apiKey: {
         label: "API Key",
-        help: "Optional API key for authentication",
-        sensitive: true
+        sensitive: true,
+        help: "可选：OpenViking API Key"
+      },
+      uriBase: {
+        label: "URI Base",
+        advanced: true,
+        placeholder: "viking://resources/openclaw/{agentId}",
+        help: "资源根路径，支持 {agentId} 占位符"
       },
       tieredLoading: {
         label: "Tiered Loading",
-        help: "Enable L0/L1/L2 tiered content loading to save tokens",
+        advanced: true,
+        help: "memory_get 未指定行号时优先返回目录概览（L1）"
+      },
+      "sync.interval": {
+        label: "Sync Interval",
+        advanced: true,
+        placeholder: "5m",
+        help: "自动同步间隔（例如 30s/5m/1h）"
+      },
+      "sync.onBoot": {
+        label: "Sync On Boot",
         advanced: true
       },
-      autoLayering: {
-        label: "Auto Layering",
-        help: "Automatically generate L0/L1 summaries on sync",
-        advanced: true
+      "sync.waitForProcessing": {
+        label: "Wait For Processing",
+        advanced: true,
+        help: "同步后等待 OpenViking 队列处理完成"
+      },
+      "search.mode": {
+        label: "Search Mode",
+        advanced: true,
+        help: "find=快速检索，search=带会话语义"
+      },
+      "search.targetUri": {
+        label: "Target URI",
+        advanced: true,
+        help: "限定检索范围"
       },
       "server.enabled": {
-        label: "Auto-start Server",
-        help: "Automatically start OpenViking server using the local venv",
+        label: "Auto-start OpenViking",
         advanced: true
       },
       "server.venvPath": {
-        label: "Virtual Environment Path",
-        help: "Path to Python venv containing openviking package (e.g., /home/kevinzhow/openviking/venv)",
+        label: "OpenViking Venv Path",
+        advanced: true,
         placeholder: "/path/to/venv"
-      },
-      "server.dataDir": {
-        label: "Data Directory",
-        help: "Optional: Path to OpenViking data directory",
-        placeholder: "/path/to/data"
       }
     }
   },
+  register(api: OpenClawPluginApi) {
+    const cfg = resolveConfig(api.pluginConfig);
+    api.logger.info(`openviking plugin loaded (baseUrl=${cfg.baseUrl})`);
 
-  /**
-   * 注册插件
-   * 在 OpenClaw 启动时调用
-   */
-  register: async (api: OpenClawPluginApi) => {
-    api.logger.info("OpenViking memory plugin registered");
-  },
-
-  /**
-   * 激活插件
-   * 在配置加载完成后调用，创建并注册 MemoryManager
-   */
-  activate: async (api: OpenClawPluginApi) => {
-    // 获取插件配置
-    const rawConfig = api.pluginConfig;
-    const validation = validateConfig(rawConfig);
-
-    if (!validation.ok) {
-      api.logger.error(`OpenViking config invalid: ${validation.errors.join(", ")}`);
-      throw new Error(`Invalid OpenViking configuration: ${validation.errors.join(", ")}`);
-    }
-
-    const config = validation.data;
-    api.logger.info(`OpenViking activating with baseUrl: ${config.baseUrl}`);
-
-    // 如果需要，自动启动 OpenViking 服务
+    const managers = new Map<string, OpenVikingMemoryManager>();
+    const bootSyncDone = new Set<string>();
     let serverManager: OpenVikingServerManager | undefined;
-    if (config.server?.enabled) {
+    let serverStarted = false;
+    let serverStartPromise: Promise<void> | null = null;
+    let syncTimer: NodeJS.Timeout | null = null;
+
+    const ensureServer = async (): Promise<void> => {
+      if (!cfg.server?.enabled) {
+        return;
+      }
+      if (serverStarted) {
+        return;
+      }
+      if (serverStartPromise) {
+        await serverStartPromise;
+        return;
+      }
       serverManager = new OpenVikingServerManager({
-        config: config.server,
+        config: cfg.server,
         logger: api.logger
       });
-      await serverManager.start();
-    }
+      serverStartPromise = serverManager.start();
+      await serverStartPromise;
+      serverStarted = true;
+    };
 
-    // 创建 memory manager
-    const manager = new OpenVikingMemoryManager({
-      config,
-      workspaceDir: api.runtime.workspaceDir ?? process.cwd(),
-      agentId: api.runtime.agentId ?? "default",
-      logger: api.logger
-    });
+    const managerKey = (workspaceDir: string, agentId: string): string => `${workspaceDir}::${agentId}`;
 
-    // 健康检查
-    try {
-      const probe = await manager.probeEmbeddingAvailability();
-      if (!probe.ok) {
-        api.logger.warn(`OpenViking health check failed: ${probe.error}`);
-      } else {
-        api.logger.info("OpenViking health check passed");
+    const getManager = async (ctx: PluginToolContext): Promise<MemorySearchManager> => {
+      const workspaceDir = ctx.workspaceDir ?? process.cwd();
+      const agentId = ctx.agentId ?? "main";
+      const key = managerKey(workspaceDir, agentId);
+
+      await ensureServer();
+
+      let manager = managers.get(key);
+      if (!manager) {
+        manager = new OpenVikingMemoryManager({
+          config: cfg,
+          workspaceDir,
+          agentId,
+          logger: api.logger
+        });
+        managers.set(key, manager);
       }
-    } catch (error) {
-      api.logger.error(`OpenViking health check error: ${error}`);
-    }
 
-    // 注册 memory backend
-    // 注意: 实际注册方式取决于 OpenClaw Plugin SDK 的具体实现
-    // 这里假设通过 runtime 提供的方法注册
-    if (api.runtime.registerMemoryBackend) {
-      api.runtime.registerMemoryBackend(manager);
-      api.logger.info("OpenViking memory backend registered successfully");
-    } else {
-      // Fallback: 可能需要通过其他方式注册
-      api.logger.warn("registerMemoryBackend not available in runtime, memory tools may not work");
-    }
-
-    // 启动时同步（如果配置开启）
-    if (config.sync?.onBoot !== false) {
-      try {
-        await manager.sync({ reason: "boot" });
-      } catch (error) {
-        api.logger.error(`Initial sync failed: ${error}`);
+      if (!bootSyncDone.has(key) && cfg.sync?.onBoot !== false) {
+        bootSyncDone.add(key);
+        manager
+          .sync({ reason: "boot" })
+          .catch((error) => api.logger.warn(`openviking boot sync failed (${agentId}): ${String(error)}`));
       }
-    }
 
-    // 设置定时同步
-    if (config.sync?.interval) {
-      const intervalMs = parseInterval(config.sync.interval);
-      if (intervalMs > 0) {
-        const syncInterval = setInterval(() => {
-          manager.sync({ reason: "scheduled" }).catch((err) => {
-            api.logger.error(`Scheduled sync failed: ${err}`);
-          });
-        }, intervalMs);
+      return manager;
+    };
 
-        // 清理定时器
-        api.on?.("gateway_stop", async () => {
-          clearInterval(syncInterval);
-          await manager.close();
-          if (serverManager) {
-            await serverManager.stop();
+    const memorySearchToolFactory = (ctx: PluginToolContext): AnyAgentTool[] => {
+      const memorySearchTool: AnyAgentTool = {
+        label: "Memory Search",
+        name: "memory_search",
+        description:
+          "Search memory content in OpenViking before answering questions about prior decisions, people, preferences, tasks, and historical context.",
+        parameters: MemorySearchSchema,
+        execute: async (_toolCallId, params) => {
+          const payload = (params ?? {}) as Record<string, unknown>;
+          const query = readStringParam(payload, "query");
+          const maxResults = readOptionalNumber(payload, "maxResults");
+          const minScore = readOptionalNumber(payload, "minScore");
+
+          if (!query) {
+            return jsonResult({ results: [], disabled: true, error: "query required" });
           }
+
+          try {
+            const manager = await getManager(ctx);
+            const results = await manager.search(query, {
+              maxResults: maxResults ?? undefined,
+              minScore: minScore ?? undefined,
+              sessionKey: ctx.sessionKey
+            });
+            const status = manager.status();
+            return jsonResult({
+              results,
+              provider: status.provider,
+              model: status.model
+            });
+          } catch (error) {
+            return jsonResult({
+              results: [],
+              disabled: true,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
+      };
+
+      const memoryGetTool: AnyAgentTool = {
+        label: "Memory Get",
+        name: "memory_get",
+        description:
+          "Read a specific memory file path from OpenViking (optionally by line range) after running memory_search.",
+        parameters: MemoryGetSchema,
+        execute: async (_toolCallId, params) => {
+          const payload = (params ?? {}) as Record<string, unknown>;
+          const relPath = readStringParam(payload, "path");
+          const from = readOptionalInteger(payload, "from");
+          const lines = readOptionalInteger(payload, "lines");
+
+          if (!relPath) {
+            return jsonResult({ path: "", text: "", disabled: true, error: "path required" });
+          }
+
+          try {
+            const manager = await getManager(ctx);
+            const result = await manager.readFile({
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined
+            });
+            return jsonResult(result);
+          } catch (error) {
+            return jsonResult({
+              path: relPath,
+              text: "",
+              disabled: true,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
+      };
+
+      return [memorySearchTool, memoryGetTool];
+    };
+
+    api.registerTool(memorySearchToolFactory, { names: ["memory_search", "memory_get"] });
+
+    const intervalMs = parseInterval(cfg.sync?.interval);
+    if (intervalMs > 0) {
+      syncTimer = setInterval(() => {
+        for (const manager of managers.values()) {
+          manager.sync?.({ reason: "interval" }).catch((error) => {
+            api.logger.warn(`openviking scheduled sync failed: ${String(error)}`);
+          });
+        }
+      }, intervalMs);
+    }
+
+    api.on("gateway_stop", async () => {
+      if (syncTimer) {
+        clearInterval(syncTimer);
+        syncTimer = null;
+      }
+      await Promise.all(
+        [...managers.values()].map(async (manager) => {
+          await manager.close?.().catch(() => undefined);
+        })
+      );
+      managers.clear();
+      if (serverManager) {
+        await serverManager.stop().catch((error) => {
+          api.logger.warn(`failed to stop openviking server: ${String(error)}`);
         });
       }
-    } else if (serverManager) {
-      // 没有定时同步也要在关闭时停止服务
-      api.on?.("gateway_stop", async () => {
-        await manager.close();
-        await serverManager!.stop();
-      });
-    }
+    });
   }
 };
 
-/**
- * 解析时间间隔字符串
- * 支持: 5m, 1h, 30s
- */
-function parseInterval(interval: string): number {
-  const match = interval.match(/^(\d+)([smhd])$/);
-  if (!match) return 0;
+function resolveConfig(raw: unknown): OpenVikingPluginConfig {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const baseUrl = typeof input.baseUrl === "string" && input.baseUrl.trim() ? input.baseUrl.trim() : "";
+  if (!baseUrl) {
+    throw new Error("OpenViking config invalid: baseUrl is required");
+  }
 
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
+  const searchRaw =
+    input.search && typeof input.search === "object" ? (input.search as Record<string, unknown>) : {};
+  const syncRaw =
+    input.sync && typeof input.sync === "object" ? (input.sync as Record<string, unknown>) : {};
+  const serverRaw =
+    input.server && typeof input.server === "object" ? (input.server as Record<string, unknown>) : undefined;
 
-  const multipliers: Record<string, number> = {
-    s: 1000,
-    m: 60 * 1000,
-    h: 60 * 60 * 1000,
-    d: 24 * 60 * 60 * 1000
+  return {
+    baseUrl,
+    apiKey: typeof input.apiKey === "string" ? input.apiKey : undefined,
+    uriBase: typeof input.uriBase === "string" ? input.uriBase : undefined,
+    tieredLoading: typeof input.tieredLoading === "boolean" ? input.tieredLoading : true,
+    mappings:
+      input.mappings && typeof input.mappings === "object"
+        ? (input.mappings as Record<string, string>)
+        : undefined,
+    search: {
+      mode: searchRaw.mode === "search" ? "search" : "find",
+      defaultLimit:
+        typeof searchRaw.defaultLimit === "number" && Number.isFinite(searchRaw.defaultLimit)
+          ? searchRaw.defaultLimit
+          : 6,
+      scoreThreshold:
+        typeof searchRaw.scoreThreshold === "number" && Number.isFinite(searchRaw.scoreThreshold)
+          ? searchRaw.scoreThreshold
+          : 0.0,
+      targetUri: typeof searchRaw.targetUri === "string" ? searchRaw.targetUri : undefined
+    },
+    sync: {
+      interval: typeof syncRaw.interval === "string" ? syncRaw.interval : undefined,
+      onBoot: typeof syncRaw.onBoot === "boolean" ? syncRaw.onBoot : true,
+      waitForProcessing:
+        typeof syncRaw.waitForProcessing === "boolean" ? syncRaw.waitForProcessing : false,
+      waitTimeoutSec:
+        typeof syncRaw.waitTimeoutSec === "number" && Number.isFinite(syncRaw.waitTimeoutSec)
+          ? syncRaw.waitTimeoutSec
+          : undefined
+    },
+    server: resolveServerConfig(serverRaw)
   };
-
-  return value * (multipliers[unit] ?? 0);
 }
 
-// 导出插件作为默认和命名导出
+function resolveServerConfig(
+  serverRaw: Record<string, unknown> | undefined
+): OpenVikingPluginConfig["server"] {
+  if (!serverRaw || serverRaw.enabled !== true) {
+    return undefined;
+  }
+  if (typeof serverRaw.venvPath !== "string" || !serverRaw.venvPath.trim()) {
+    throw new Error("OpenViking config invalid: server.venvPath is required when server.enabled=true");
+  }
+  return {
+    enabled: true,
+    venvPath: serverRaw.venvPath.trim(),
+    dataDir: typeof serverRaw.dataDir === "string" ? serverRaw.dataDir : undefined,
+    host: typeof serverRaw.host === "string" ? serverRaw.host : undefined,
+    port:
+      typeof serverRaw.port === "number" && Number.isFinite(serverRaw.port)
+        ? Math.trunc(serverRaw.port)
+        : undefined,
+    startupTimeoutMs:
+      typeof serverRaw.startupTimeoutMs === "number" && Number.isFinite(serverRaw.startupTimeoutMs)
+        ? Math.trunc(serverRaw.startupTimeoutMs)
+        : undefined,
+    env: isStringRecord(serverRaw.env) ? serverRaw.env : undefined
+  };
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return Object.values(value as Record<string, unknown>).every((entry) => typeof entry === "string");
+}
+
+function parseInterval(interval?: string): number {
+  if (!interval) {
+    return 0;
+  }
+  const match = interval.trim().match(/^(\d+)\s*([smhd])$/i);
+  if (!match) {
+    return 0;
+  }
+  const amount = Math.max(0, Number.parseInt(match[1], 10));
+  const unit = match[2].toLowerCase();
+  const multiplier: Record<string, number> = {
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000
+  };
+  return amount * (multiplier[unit] ?? 0);
+}
+
+function readStringParam(params: Record<string, unknown>, key: string): string {
+  const raw = params[key];
+  if (typeof raw !== "string") {
+    return "";
+  }
+  return raw.trim();
+}
+
+function readOptionalNumber(params: Record<string, unknown>, key: string): number | undefined {
+  const raw = params[key];
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function readOptionalInteger(params: Record<string, unknown>, key: string): number | undefined {
+  const value = readOptionalNumber(params, key);
+  if (value === undefined) {
+    return undefined;
+  }
+  return Math.trunc(value);
+}
+
+function jsonResult(payload: unknown): { content: Array<{ type: "text"; text: string }>; details: unknown } {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(payload, null, 2)
+      }
+    ],
+    details: payload
+  };
+}
+
 export default plugin;
-export { plugin as openvikingPlugin };

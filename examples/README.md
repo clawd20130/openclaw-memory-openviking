@@ -13,10 +13,10 @@ npm install -g @kevinzhow/openclaw-memory-openviking
 {
   plugins: {
     slots: {
-      memory: "@kevinzhow/openclaw-memory-openviking"
+      memory: "openclaw-memory-openviking"
     },
     entries: {
-      "@kevinzhow/openclaw-memory-openviking": {
+      "openclaw-memory-openviking": {
         enabled: true,
         config: {
           baseUrl: "http://127.0.0.1:1933"
@@ -32,9 +32,9 @@ npm install -g @kevinzhow/openclaw-memory-openviking
 ```json5
 {
   plugins: {
-    slots: { memory: "openviking" },
+    slots: { memory: "openclaw-memory-openviking" },
     entries: {
-      openviking: {
+      "openclaw-memory-openviking": {
         enabled: true,
         config: {
           baseUrl: "http://127.0.0.1:1933",
@@ -62,7 +62,7 @@ export OPENVIKING_API_KEY="your-api-key"
 {
   plugins: {
     entries: {
-      openviking: {
+      "openclaw-memory-openviking": {
         enabled: true,
         config: {
           baseUrl: process.env.OPENVIKING_URL,

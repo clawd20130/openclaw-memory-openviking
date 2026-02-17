@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { PathMapper } from "../mapper.js";
+import { PathMapper } from "../src/mapper.js";
 
 describe("PathMapper", () => {
   describe("toVikingUri", () => {
@@ -12,7 +12,7 @@ describe("PathMapper", () => {
       const mapper = new PathMapper();
       assert.strictEqual(
         mapper.toVikingUri("MEMORY.md"),
-        "viking://user/memories/longterm"
+        "viking://resources/openclaw/main/memory-sync/root/MEMORY"
       );
     });
 
@@ -20,7 +20,7 @@ describe("PathMapper", () => {
       const mapper = new PathMapper();
       assert.strictEqual(
         mapper.toVikingUri("SOUL.md"),
-        "viking://user/preferences/persona"
+        "viking://resources/openclaw/main/memory-sync/root/SOUL"
       );
     });
 
@@ -28,7 +28,7 @@ describe("PathMapper", () => {
       const mapper = new PathMapper();
       assert.strictEqual(
         mapper.toVikingUri("memory/2025-06-18.md"),
-        "viking://user/memories/daily/2025-06-18"
+        "viking://resources/openclaw/main/memory-sync/memory/2025-06-18"
       );
     });
 
@@ -36,7 +36,7 @@ describe("PathMapper", () => {
       const mapper = new PathMapper();
       assert.strictEqual(
         mapper.toVikingUri("skills/weather/SKILL.md"),
-        "viking://agent/skills/weather"
+        "viking://resources/openclaw/main/memory-sync/skills/weather/SKILL"
       );
     });
 
@@ -49,13 +49,21 @@ describe("PathMapper", () => {
         "viking://custom/path"
       );
     });
+
+    it("should build content URI from local path", () => {
+      const mapper = new PathMapper();
+      assert.strictEqual(
+        mapper.toContentUri("MEMORY.md"),
+        "viking://resources/openclaw/main/memory-sync/root/MEMORY/MEMORY.md"
+      );
+    });
   });
 
   describe("fromVikingUri", () => {
     it("should reverse map MEMORY.md", () => {
       const mapper = new PathMapper();
       assert.strictEqual(
-        mapper.fromVikingUri("viking://user/memories/longterm"),
+        mapper.fromVikingUri("viking://resources/openclaw/main/memory-sync/root/MEMORY"),
         "MEMORY.md"
       );
     });
@@ -63,7 +71,7 @@ describe("PathMapper", () => {
     it("should reverse map daily files", () => {
       const mapper = new PathMapper();
       assert.strictEqual(
-        mapper.fromVikingUri("viking://user/memories/daily/2025-06-18"),
+        mapper.fromVikingUri("viking://resources/openclaw/main/memory-sync/memory/2025-06-18"),
         "memory/2025-06-18.md"
       );
     });
