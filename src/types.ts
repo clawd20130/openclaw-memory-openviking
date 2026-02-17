@@ -3,7 +3,7 @@
  */
 
 export interface OpenVikingPluginConfig {
-  /** OpenViking HTTP 服务地址 */
+  /** OpenViking HTTP 服务地址 (如果 autoStart 启用，这是服务启动后的地址) */
   baseUrl: string;
   /** 可选 API Key */
   apiKey?: string;
@@ -17,6 +17,25 @@ export interface OpenVikingPluginConfig {
   sync?: SyncConfig;
   /** 搜索配置 */
   search?: SearchConfig;
+  /** 自动启动 OpenViking 服务 */
+  server?: ServerConfig;
+}
+
+export interface ServerConfig {
+  /** 是否自动启动 */
+  enabled: boolean;
+  /** venv 路径 */
+  venvPath: string;
+  /** 数据目录 */
+  dataDir?: string;
+  /** 主机地址，默认 127.0.0.1 */
+  host?: string;
+  /** 端口，默认 8080 */
+  port?: number;
+  /** 启动超时，默认 30000ms */
+  startupTimeoutMs?: number;
+  /** 额外环境变量 */
+  env?: Record<string, string>;
 }
 
 export interface PathMappingConfig {

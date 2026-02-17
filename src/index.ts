@@ -12,12 +12,14 @@ import type {
 } from "@kevinzhow/openclaw-plugin-sdk";
 import type { OpenVikingPluginConfig } from "./types.js";
 import { OpenVikingMemoryManager } from "./manager.js";
+import { OpenVikingServerManager } from "./server.js";
 
 // 重新导出类型
 export type { OpenVikingPluginConfig } from "./types.js";
 export { OpenVikingMemoryManager } from "./manager.js";
 export { OpenVikingClient } from "./client.js";
 export { PathMapper } from "./mapper.js";
+export { OpenVikingServerManager } from "./server.js";
 
 /**
  * 配置校验函数
@@ -75,7 +77,7 @@ const plugin: OpenClawPluginDefinition = {
     uiHints: {
       baseUrl: {
         label: "OpenViking Base URL",
-        help: "HTTP endpoint of OpenViking service (e.g., http://localhost:8080)",
+        help: "HTTP endpoint of OpenViking service (e.g., http://localhost:8080). If auto-start is enabled, this is where the server will be available.",
         placeholder: "http://localhost:8080"
       },
       apiKey: {
@@ -92,6 +94,21 @@ const plugin: OpenClawPluginDefinition = {
         label: "Auto Layering",
         help: "Automatically generate L0/L1 summaries on sync",
         advanced: true
+      },
+      "server.enabled": {
+        label: "Auto-start Server",
+        help: "Automatically start OpenViking server using the local venv",
+        advanced: true
+      },
+      "server.venvPath": {
+        label: "Virtual Environment Path",
+        help: "Path to Python venv containing openviking package (e.g., /home/kevinzhow/openviking/venv)",
+        placeholder: "/path/to/venv"
+      },
+      "server.dataDir": {
+        label: "Data Directory",
+        help: "Optional: Path to OpenViking data directory",
+        placeholder: "/path/to/data"
       }
     }
   },
@@ -120,6 +137,16 @@ const plugin: OpenClawPluginDefinition = {
 
     const config = validation.data;
     api.logger.info(`OpenViking activating with baseUrl: ${config.baseUrl}`);
+
+    // 如果需要，自动启动 OpenViking 服务
+    let serverManager: OpenVikingServerManager | undefined;
+    if (config.server?.enabled) {
+      serverManager = new OpenVikingServerManager({
+        config: config.server,
+        logger: api.logger
+      });
+      await serverManager.start();
+    }
 
     // 创建 memory manager
     const manager = new OpenVikingMemoryManager({
@@ -172,11 +199,20 @@ const plugin: OpenClawPluginDefinition = {
         }, intervalMs);
 
         // 清理定时器
-        api.on?.("gateway_stop", () => {
+        api.on?.("gateway_stop", async () => {
           clearInterval(syncInterval);
-          manager.close();
+          await manager.close();
+          if (serverManager) {
+            await serverManager.stop();
+          }
         });
       }
+    } else if (serverManager) {
+      // 没有定时同步也要在关闭时停止服务
+      api.on?.("gateway_stop", async () => {
+        await manager.close();
+        await serverManager!.stop();
+      });
     }
   }
 };
