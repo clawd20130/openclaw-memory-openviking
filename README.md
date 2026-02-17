@@ -100,6 +100,9 @@ npm run build
 
 ### `sync` fields
 
+- Sync is incremental and persisted: each run scans local candidates, then only upserts files whose local fingerprint changed (`size + mtime`), and removes remote entries for files deleted locally. Snapshot state is stored at `<workspace>/.openclaw/plugins/openviking-memory/{agentId}.sync-state.json`.
+- Crash-safe recovery: if the previous sync exited unexpectedly (or finished with errors), the next run is forced to a full recovery sync.
+- `sync.ovConfigPath` (optional): path to `ov.conf`. If this file fingerprint changes, the next sync is forced to full rebuild (re-upsert all files). Relative paths are resolved from workspace root.
 - `sync.interval` (default: disabled): periodic sync interval, supported format is `^\\d+[smhd]$` (examples: `30s`, `5m`, `1h`, `1d`).
 - `sync.onBoot` (default: `true`): trigger one sync after plugin startup.
 - `sync.extraPaths` (optional): extra files/directories to sync. Paths are workspace-relative; directories are scanned recursively for `.md`.

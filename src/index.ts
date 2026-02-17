@@ -58,6 +58,7 @@ const configSchema = {
       properties: {
         interval: { type: "string" },
         onBoot: { type: "boolean" },
+        ovConfigPath: { type: "string" },
         extraPaths: {
           type: "array",
           items: { type: "string" }
@@ -133,6 +134,11 @@ const plugin = {
         label: "Sync On Boot",
         advanced: true,
         help: "Run one sync after plugin startup."
+      },
+      "sync.ovConfigPath": {
+        label: "ov.conf Path",
+        advanced: true,
+        help: "Optional ov.conf path. If the file fingerprint changes, the next sync runs a full resync."
       },
       "sync.extraPaths": {
         label: "Extra Paths",
@@ -212,7 +218,8 @@ const plugin = {
     api.logger.info(`openviking plugin loaded (baseUrl=${cfg.baseUrl})`);
 
     const managers = new Map<string, OpenVikingMemoryManager>();
-    const bootSyncDone = new Set<string>();
+    const bootSyncSucceeded = new Set<string>();
+    const bootSyncRunning = new Set<string>();
     let serverManager: OpenVikingServerManager | undefined;
     let serverStarted = false;
     let serverStartPromise: Promise<void> | null = null;
@@ -258,11 +265,19 @@ const plugin = {
         managers.set(key, manager);
       }
 
-      if (!bootSyncDone.has(key) && cfg.sync?.onBoot !== false) {
-        bootSyncDone.add(key);
+      if (cfg.sync?.onBoot !== false && !bootSyncSucceeded.has(key) && !bootSyncRunning.has(key)) {
+        bootSyncRunning.add(key);
         manager
           .sync({ reason: "boot" })
-          .catch((error) => api.logger.warn(`openviking boot sync failed (${agentId}): ${String(error)}`));
+          .then(() => {
+            bootSyncSucceeded.add(key);
+          })
+          .catch((error) => {
+            api.logger.warn(`openviking boot sync failed (${agentId}): ${String(error)}`);
+          })
+          .finally(() => {
+            bootSyncRunning.delete(key);
+          });
       }
 
       return manager;
@@ -417,6 +432,7 @@ function resolveConfig(raw: unknown): OpenVikingPluginConfig {
     sync: {
       interval: typeof syncRaw.interval === "string" ? syncRaw.interval : undefined,
       onBoot: typeof syncRaw.onBoot === "boolean" ? syncRaw.onBoot : true,
+      ovConfigPath: typeof syncRaw.ovConfigPath === "string" ? syncRaw.ovConfigPath : undefined,
       extraPaths: parseStringArray(syncRaw.extraPaths),
       waitForProcessing:
         typeof syncRaw.waitForProcessing === "boolean" ? syncRaw.waitForProcessing : false,

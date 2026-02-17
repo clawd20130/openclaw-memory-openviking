@@ -47,6 +47,8 @@ export interface SyncConfig {
   interval?: string;
   /** 启动时同步，默认 true */
   onBoot?: boolean;
+  /** ov.conf 路径（可选）。若变化则触发全量重建。 */
+  ovConfigPath?: string;
   /** 额外同步路径（相对 workspace） */
   extraPaths?: string[];
   /** 同步时等待队列处理完成 */

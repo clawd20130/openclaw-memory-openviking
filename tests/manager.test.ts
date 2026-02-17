@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -44,7 +44,10 @@ function basenameWithoutExt(filePath: string): string {
   return path.parse(filePath).name;
 }
 
-function createTestManager(workspaceDir: string, sync?: { onBoot?: boolean; extraPaths?: string[] }) {
+function createTestManager(
+  workspaceDir: string,
+  sync?: { onBoot?: boolean; extraPaths?: string[]; ovConfigPath?: string }
+) {
   return new OpenVikingMemoryManager({
     config: {
       baseUrl: "http://127.0.0.1:1933",
@@ -317,5 +320,365 @@ describe("OpenVikingMemoryManager sync.extraPaths", () => {
     await manager.sync({ reason: "test" });
 
     assert.strictEqual(importCount, 1);
+  });
+
+  it("skips unchanged files after manager restart via persisted snapshot", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-incremental-"));
+    await writeFile(path.join(workspace, "MEMORY.md"), "# memory\n", "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const existing = new Set<string>(["viking://resources/openclaw/main/memory-sync/root"]);
+    let importCount = 0;
+    let deleteCount = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: true });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { uri?: string };
+        if (body.uri) {
+          existing.add(body.uri);
+        }
+        return okResponse({ uri: body.uri ?? "" });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        deleteCount += 1;
+        existing.delete(uri);
+        return okResponse({ uri });
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        importCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string; target?: string };
+        existing.add(desiredUri);
+        return okResponse({
+          status: "queued",
+          root_uri: `${body.target}/${basenameWithoutExt(body.path ?? "")}`,
+          source_path: body.path ?? ""
+        });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const managerA = createTestManager(workspace);
+    await managerA.sync({ reason: "test" });
+
+    const managerB = createTestManager(workspace);
+    await managerB.sync({ reason: "test" });
+
+    assert.strictEqual(importCount, 1);
+    assert.strictEqual(deleteCount, 0);
+  });
+
+  it("forces full sync when ov.conf fingerprint changes", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-ovconf-"));
+    await writeFile(path.join(workspace, "MEMORY.md"), "# memory\n", "utf-8");
+    await writeFile(path.join(workspace, "ov.conf"), "embedding=model-a\n", "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const existing = new Set<string>(["viking://resources/openclaw/main/memory-sync/root"]);
+    let importCount = 0;
+    let deleteCount = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: true });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { uri?: string };
+        if (body.uri) {
+          existing.add(body.uri);
+        }
+        return okResponse({ uri: body.uri ?? "" });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        deleteCount += 1;
+        existing.delete(uri);
+        return okResponse({ uri });
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        importCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string; target?: string };
+        existing.add(desiredUri);
+        return okResponse({
+          status: "queued",
+          root_uri: `${body.target}/${basenameWithoutExt(body.path ?? "")}`,
+          source_path: body.path ?? ""
+        });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const managerA = createTestManager(workspace, { ovConfigPath: "ov.conf" });
+    await managerA.sync({ reason: "test" });
+
+    const managerB = createTestManager(workspace, { ovConfigPath: "ov.conf" });
+    await managerB.sync({ reason: "test" });
+    assert.strictEqual(importCount, 1);
+    assert.strictEqual(deleteCount, 0);
+
+    await writeFile(path.join(workspace, "ov.conf"), "embedding=model-b\n", "utf-8");
+
+    const managerC = createTestManager(workspace, { ovConfigPath: "ov.conf" });
+    await managerC.sync({ reason: "test" });
+
+    assert.strictEqual(importCount, 2);
+    assert.strictEqual(deleteCount, 1);
+  });
+
+  it("removes stale remote file when local file is deleted", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-delete-stale-"));
+    const memoryPath = path.join(workspace, "MEMORY.md");
+    await writeFile(memoryPath, "# memory\n", "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const existing = new Set<string>(["viking://resources/openclaw/main/memory-sync/root"]);
+    let importCount = 0;
+    let deleteCount = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: uri.endsWith("/root") });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { uri?: string };
+        if (body.uri) {
+          existing.add(body.uri);
+        }
+        return okResponse({ uri: body.uri ?? "" });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        deleteCount += 1;
+        existing.delete(uri);
+        return okResponse({ uri });
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        importCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string; target?: string };
+        existing.add(desiredUri);
+        return okResponse({
+          status: "queued",
+          root_uri: `${body.target}/${basenameWithoutExt(body.path ?? "")}`,
+          source_path: body.path ?? ""
+        });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = createTestManager(workspace);
+    await manager.sync({ reason: "test" });
+    await rm(memoryPath);
+    await manager.sync({ reason: "test" });
+
+    assert.strictEqual(importCount, 1);
+    assert.strictEqual(deleteCount, 1);
+  });
+
+  it("forces recovery full sync when previous snapshot was left running", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-recover-running-"));
+    const memoryPath = path.join(workspace, "MEMORY.md");
+    await writeFile(memoryPath, "# memory\n", "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const memoryStat = await stat(memoryPath);
+    const fingerprint = `${memoryStat.size}:${Math.trunc(memoryStat.mtimeMs)}`;
+
+    const snapshotDir = path.join(workspace, ".openclaw", "plugins", "openviking-memory");
+    await mkdir(snapshotDir, { recursive: true });
+    await writeFile(
+      path.join(snapshotDir, "main.sync-state.json"),
+      `${JSON.stringify(
+        {
+          version: 3,
+          agentId: "main",
+          entries: [
+            {
+              relPath: "MEMORY.md",
+              fingerprint,
+              uri: desiredUri
+            }
+          ],
+          lastRunStatus: "running"
+        },
+        null,
+        2
+      )}\n`,
+      "utf-8"
+    );
+
+    let importCount = 0;
+    const existing = new Set<string>(["viking://resources/openclaw/main/memory-sync/root"]);
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: true });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        importCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string; target?: string };
+        return okResponse({
+          status: "queued",
+          root_uri: `${body.target}/${basenameWithoutExt(body.path ?? "")}`,
+          source_path: body.path ?? ""
+        });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        return okResponse({ uri: "" });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        throw new Error("DELETE not expected");
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = createTestManager(workspace);
+    await manager.sync({ reason: "test" });
+
+    assert.strictEqual(importCount, 1);
+  });
+
+  it("forces recovery full sync after a failed previous run", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-recover-failed-"));
+    const memoryPath = path.join(workspace, "MEMORY.md");
+    await writeFile(memoryPath, "# memory\n", "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const memoryStat = await stat(memoryPath);
+    const fingerprint = `${memoryStat.size}:${Math.trunc(memoryStat.mtimeMs)}`;
+
+    const snapshotDir = path.join(workspace, ".openclaw", "plugins", "openviking-memory");
+    await mkdir(snapshotDir, { recursive: true });
+    await writeFile(
+      path.join(snapshotDir, "main.sync-state.json"),
+      `${JSON.stringify(
+        {
+          version: 3,
+          agentId: "main",
+          entries: [
+            {
+              relPath: "MEMORY.md",
+              fingerprint,
+              uri: desiredUri
+            }
+          ],
+          lastRunStatus: "success"
+        },
+        null,
+        2
+      )}\n`,
+      "utf-8"
+    );
+
+    let phase = 1;
+    let firstAttemptImports = 0;
+    let secondAttemptImports = 0;
+    const existing = new Set<string>(["viking://resources/openclaw/main/memory-sync/root"]);
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: true });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        if (phase === 1) {
+          firstAttemptImports += 1;
+          return new Response(
+            JSON.stringify({
+              status: "error",
+              error: {
+                code: "INTERNAL_ERROR",
+                message: "import failed"
+              }
+            }),
+            {
+              status: 500,
+              headers: { "Content-Type": "application/json" }
+            }
+          );
+        }
+
+        secondAttemptImports += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string; target?: string };
+        return okResponse({
+          status: "queued",
+          root_uri: `${body.target}/${basenameWithoutExt(body.path ?? "")}`,
+          source_path: body.path ?? ""
+        });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        return okResponse({ uri: "" });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        throw new Error("DELETE not expected");
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const managerA = createTestManager(workspace);
+    await managerA.sync({ reason: "test", force: true });
+    phase = 2;
+
+    const managerB = createTestManager(workspace);
+    await managerB.sync({ reason: "test" });
+
+    assert.strictEqual(firstAttemptImports, 1);
+    assert.strictEqual(secondAttemptImports, 1);
   });
 });

@@ -4,6 +4,7 @@
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { OpenVikingClient, OpenVikingHttpError } from "./client.js";
 import { PathMapper } from "./mapper.js";
 import type {
@@ -28,6 +29,44 @@ export interface OpenVikingMemoryManagerOptions {
   };
 }
 
+interface LocalSyncFile {
+  relPath: string;
+  fullPath: string;
+  desiredRootUri: string;
+  targetParentUri: string;
+  fingerprint: string;
+}
+
+interface SyncedFileSnapshot {
+  fingerprint: string;
+  uri: string;
+}
+
+interface PersistedSyncStateEntry {
+  relPath: string;
+  fingerprint: string;
+  uri: string;
+}
+
+interface PersistedSyncState {
+  version: number;
+  agentId: string;
+  entries: PersistedSyncStateEntry[];
+  ovConfigPath?: string;
+  ovConfigFingerprint?: string;
+  lastRunStatus?: PersistedSyncLastRunStatus;
+  lastRunReason?: string;
+  lastRunStartedAt?: string;
+  lastRunCompletedAt?: string;
+}
+
+interface OvConfigState {
+  path?: string;
+  fingerprint?: string;
+}
+
+type PersistedSyncLastRunStatus = "running" | "success" | "failed";
+
 export class OpenVikingMemoryManager implements MemorySearchManager {
   private readonly client: OpenVikingClient;
   private readonly mapper: PathMapper;
@@ -35,14 +74,25 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
   private readonly workspaceDir: string;
   private readonly agentId: string;
   private readonly logger?: OpenVikingMemoryManagerOptions["logger"];
+  private readonly snapshotFilePath: string;
   private closed = false;
   private lastSyncAt?: Date;
+  private readonly syncedSnapshot = new Map<string, SyncedFileSnapshot>();
+  private snapshotLoaded = false;
+  private snapshotOvConfigPath?: string;
+  private snapshotOvConfigFingerprint?: string;
+  private snapshotLastRunStatus: PersistedSyncLastRunStatus = "success";
+  private snapshotLastRunReason?: string;
+  private snapshotLastRunStartedAt?: string;
+  private snapshotLastRunCompletedAt?: string;
+  private snapshotRecoveryNeeded = false;
 
   constructor(options: OpenVikingMemoryManagerOptions) {
     this.config = options.config;
     this.workspaceDir = options.workspaceDir;
     this.agentId = options.agentId;
     this.logger = options.logger;
+    this.snapshotFilePath = this.resolveSnapshotFilePath(options.agentId);
     this.client = new OpenVikingClient({
       baseUrl: options.config.baseUrl,
       apiKey: options.config.apiKey,
@@ -167,37 +217,151 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     this.ensureOpen();
+    await this.ensureSnapshotLoaded();
 
-    const files = await this.scanFiles();
-    const total = files.length;
-    let completed = 0;
+    const syncReason = params?.reason ?? "manual";
+    const recoveryRequired = this.snapshotRecoveryNeeded;
+    if (recoveryRequired) {
+      this.logger?.warn(
+        "openviking detected interrupted/failed previous sync, force a full recovery sync"
+      );
+    }
 
-    this.logger?.info(`openviking sync started: reason=${params?.reason ?? "manual"}, files=${total}`);
-    params?.progress?.({ completed, total, label: "Scanning memory files..." });
+    this.snapshotRecoveryNeeded = false;
+    this.snapshotLastRunStatus = "running";
+    this.snapshotLastRunReason = syncReason;
+    this.snapshotLastRunStartedAt = new Date().toISOString();
+    this.snapshotLastRunCompletedAt = undefined;
+    await this.persistSnapshot().catch((error) => {
+      this.logger?.warn(`Failed to mark sync as running: ${String(error)}`);
+    });
 
-    for (const relPath of files) {
-      try {
-        await this.syncFile(relPath);
-      } catch (error) {
-        this.logger?.error(`Failed to sync ${relPath}: ${String(error)}`);
-      } finally {
-        completed += 1;
-        params?.progress?.({
-          completed,
-          total,
-          label: `Syncing ${path.basename(relPath)}`
-        });
+    let syncCompletedSuccessfully = false;
+
+    try {
+      const ovConfigState = await this.readOvConfigState();
+      const ovConfigChanged = this.hasOvConfigChanged(ovConfigState);
+      if (ovConfigChanged) {
+        this.logger?.info(
+          `openviking ov.conf changed, trigger full sync: path=${ovConfigState.path ?? "n/a"}`
+        );
       }
-    }
+      const forceFullSync = params?.force === true || ovConfigChanged || recoveryRequired;
 
-    if (this.config.sync?.waitForProcessing) {
-      const timeout = this.config.sync.waitTimeoutSec;
-      await this.client.waitProcessed(timeout);
-    }
+      const localFiles = await this.collectLocalSyncFiles();
+      const localByPath = new Map(localFiles.map((file) => [file.relPath, file]));
+      const staleEntries = [...this.syncedSnapshot.entries()].filter(
+        ([relPath]) => !localByPath.has(relPath)
+      );
+      const filesToSync = forceFullSync
+        ? localFiles
+        : localFiles.filter((file) => {
+            const previous = this.syncedSnapshot.get(file.relPath);
+            if (!previous) {
+              return true;
+            }
+            if (previous.fingerprint !== file.fingerprint) {
+              return true;
+            }
+            return this.normalizeUri(previous.uri) !== this.normalizeUri(file.desiredRootUri);
+          });
+      const total = filesToSync.length + staleEntries.length;
+      let completed = 0;
+      let syncedCount = 0;
+      let removedCount = 0;
+      const skippedCount = localFiles.length - filesToSync.length;
+      let syncHadErrors = false;
+      this.snapshotOvConfigPath = ovConfigState.path;
+      this.snapshotOvConfigFingerprint = ovConfigState.fingerprint;
 
-    this.lastSyncAt = new Date();
-    params?.progress?.({ completed: total, total, label: "Sync completed" });
-    this.logger?.info(`openviking sync finished: ${total} files`);
+      this.logger?.info(
+        `openviking sync started: reason=${syncReason}, force=${forceFullSync}, scanned=${localFiles.length}, upsert=${filesToSync.length}, delete=${staleEntries.length}, skipped=${skippedCount}`
+      );
+      params?.progress?.({ completed, total, label: "Scanning memory files..." });
+
+      for (const file of filesToSync) {
+        try {
+          const previous = this.syncedSnapshot.get(file.relPath);
+          const previousUri =
+            previous && this.normalizeUri(previous.uri) !== this.normalizeUri(file.desiredRootUri)
+              ? previous.uri
+              : undefined;
+          await this.syncFile(file);
+          if (previousUri) {
+            await this.tryRemove(previousUri).catch((error) => {
+              this.logger?.warn(
+                `Failed to remove previous mapped uri for ${file.relPath}: ${String(error)}`
+              );
+            });
+          }
+          this.syncedSnapshot.set(file.relPath, {
+            fingerprint: file.fingerprint,
+            uri: file.desiredRootUri
+          });
+          syncedCount += 1;
+        } catch (error) {
+          syncHadErrors = true;
+          this.logger?.error(`Failed to sync ${file.relPath}: ${String(error)}`);
+        } finally {
+          completed += 1;
+          params?.progress?.({
+            completed,
+            total,
+            label: `Syncing ${path.basename(file.relPath)}`
+          });
+        }
+      }
+
+      for (const [relPath, snapshot] of staleEntries) {
+        try {
+          await this.tryRemove(snapshot.uri);
+          this.syncedSnapshot.delete(relPath);
+          removedCount += 1;
+        } catch (error) {
+          syncHadErrors = true;
+          this.logger?.error(`Failed to remove stale remote memory for ${relPath}: ${String(error)}`);
+        } finally {
+          completed += 1;
+          params?.progress?.({
+            completed,
+            total,
+            label: `Removing ${path.basename(relPath)}`
+          });
+        }
+      }
+
+      if (this.config.sync?.waitForProcessing) {
+        const timeout = this.config.sync.waitTimeoutSec;
+        try {
+          await this.client.waitProcessed(timeout);
+        } catch (error) {
+          syncHadErrors = true;
+          this.logger?.error(`Failed to wait OpenViking processing queues: ${String(error)}`);
+        }
+      }
+
+      this.lastSyncAt = new Date();
+      params?.progress?.({ completed: total, total, label: "Sync completed" });
+      this.logger?.info(
+        `openviking sync finished: scanned=${localFiles.length}, synced=${syncedCount}, removed=${removedCount}, skipped=${skippedCount}`
+      );
+
+      if (syncHadErrors) {
+        this.logger?.warn("openviking sync finished with errors; next sync will force recovery");
+      }
+      syncCompletedSuccessfully = !syncHadErrors;
+    } catch (error) {
+      this.logger?.error(`openviking sync aborted: ${String(error)}`);
+      throw error;
+    } finally {
+      this.snapshotLastRunStatus = syncCompletedSuccessfully ? "success" : "failed";
+      this.snapshotLastRunCompletedAt = new Date().toISOString();
+      this.snapshotRecoveryNeeded = !syncCompletedSuccessfully;
+
+      await this.persistSnapshot().catch((error) => {
+        this.logger?.warn(`Failed to persist sync snapshot: ${String(error)}`);
+      });
+    }
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
@@ -363,6 +527,24 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     return [...files].sort((a, b) => a.localeCompare(b));
   }
 
+  private async collectLocalSyncFiles(): Promise<LocalSyncFile[]> {
+    const relPaths = await this.scanFiles();
+    const files: LocalSyncFile[] = [];
+    for (const relPath of relPaths) {
+      const safeRelPath = this.ensureSafeRelPath(relPath);
+      const fullPath = path.join(this.workspaceDir, safeRelPath);
+      const stat = await fs.stat(fullPath);
+      files.push({
+        relPath: safeRelPath,
+        fullPath,
+        desiredRootUri: this.mapper.toVikingUri(safeRelPath),
+        targetParentUri: this.mapper.toTargetParentUri(safeRelPath),
+        fingerprint: this.toFileFingerprint(stat.size, stat.mtimeMs)
+      });
+    }
+    return files;
+  }
+
   private async scanExtraPath(rawPath: string, files: Set<string>): Promise<void> {
     const relPath = this.resolveExtraPath(rawPath);
     if (!relPath) {
@@ -434,11 +616,214 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async syncFile(relPath: string): Promise<void> {
-    const safeRelPath = this.ensureSafeRelPath(relPath);
-    const fullPath = path.join(this.workspaceDir, safeRelPath);
-    const desiredRootUri = this.mapper.toVikingUri(safeRelPath);
-    const targetParentUri = this.mapper.toTargetParentUri(safeRelPath);
+  private toFileFingerprint(size: number, mtimeMs: number): string {
+    return `${size}:${Math.trunc(mtimeMs)}`;
+  }
+
+  private resolveExplicitOvConfigPath(): string | undefined {
+    const configuredPath = this.config.sync?.ovConfigPath?.trim();
+    if (configuredPath) {
+      return path.isAbsolute(configuredPath)
+        ? path.resolve(configuredPath)
+        : path.resolve(this.workspaceDir, configuredPath);
+    }
+
+    const serverDataDir = this.config.server?.dataDir?.trim();
+    if (!serverDataDir) {
+      return undefined;
+    }
+
+    if (path.isAbsolute(serverDataDir)) {
+      return path.join(serverDataDir, "ov.conf");
+    }
+
+    const serverCwd = path.dirname(this.config.server?.venvPath ?? this.workspaceDir);
+    return path.join(path.resolve(serverCwd, serverDataDir), "ov.conf");
+  }
+
+  private resolveAutoOvConfigCandidates(): string[] {
+    const homeDir = process.env.HOME;
+    const candidates = [
+      path.join(this.workspaceDir, "ov.conf"),
+      homeDir ? path.join(homeDir, "openviking", "ov.conf") : "",
+      homeDir ? path.join(homeDir, ".openviking", "ov.conf") : ""
+    ].filter(Boolean);
+    return [...new Set(candidates)];
+  }
+
+  private async readOvConfigFingerprint(filePath: string): Promise<string | undefined> {
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+      return createHash("sha256").update(content).digest("hex");
+    } catch (error) {
+      if (!this.isFsNotFoundError(error)) {
+        this.logger?.warn(`Failed to read ov.conf: ${filePath}: ${String(error)}`);
+      }
+      return undefined;
+    }
+  }
+
+  private async readOvConfigState(): Promise<OvConfigState> {
+    const explicitPath = this.resolveExplicitOvConfigPath();
+    if (explicitPath) {
+      return {
+        path: explicitPath,
+        fingerprint: await this.readOvConfigFingerprint(explicitPath)
+      };
+    }
+
+    for (const candidate of this.resolveAutoOvConfigCandidates()) {
+      const fingerprint = await this.readOvConfigFingerprint(candidate);
+      if (fingerprint) {
+        return {
+          path: candidate,
+          fingerprint
+        };
+      }
+    }
+
+    return {};
+  }
+
+  private hasOvConfigChanged(current: OvConfigState): boolean {
+    if (!current.path && !this.snapshotOvConfigPath) {
+      return false;
+    }
+    if (current.path !== this.snapshotOvConfigPath) {
+      return true;
+    }
+    return current.fingerprint !== this.snapshotOvConfigFingerprint;
+  }
+
+  private resolveSnapshotFilePath(agentId: string): string {
+    const safeAgentId = agentId.replace(/[^a-zA-Z0-9_.-]/g, "_") || "main";
+    return path.join(
+      this.workspaceDir,
+      ".openclaw",
+      "plugins",
+      "openviking-memory",
+      `${safeAgentId}.sync-state.json`
+    );
+  }
+
+  private async ensureSnapshotLoaded(): Promise<void> {
+    if (this.snapshotLoaded) {
+      return;
+    }
+    this.snapshotLoaded = true;
+
+    let raw = "";
+    try {
+      raw = await fs.readFile(this.snapshotFilePath, "utf-8");
+    } catch (error) {
+      if (this.isFsNotFoundError(error)) {
+        return;
+      }
+      this.logger?.warn(`Failed to read sync snapshot: ${String(error)}`);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as PersistedSyncState;
+      if (
+        (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) ||
+        typeof parsed.agentId !== "string" ||
+        !Array.isArray(parsed.entries)
+      ) {
+        this.logger?.warn("Ignore sync snapshot with unsupported schema version");
+        return;
+      }
+
+      this.syncedSnapshot.clear();
+      for (const entry of parsed.entries) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        if (
+          typeof entry.relPath !== "string" ||
+          typeof entry.fingerprint !== "string" ||
+          typeof entry.uri !== "string"
+        ) {
+          continue;
+        }
+        let safeRelPath = "";
+        try {
+          safeRelPath = this.ensureSafeRelPath(entry.relPath);
+        } catch {
+          continue;
+        }
+        this.syncedSnapshot.set(safeRelPath, {
+          fingerprint: entry.fingerprint,
+          uri: entry.uri
+        });
+      }
+      this.snapshotOvConfigPath =
+        typeof parsed.ovConfigPath === "string" ? parsed.ovConfigPath : undefined;
+      this.snapshotOvConfigFingerprint =
+        typeof parsed.ovConfigFingerprint === "string" ? parsed.ovConfigFingerprint : undefined;
+      this.snapshotLastRunStatus =
+        parsed.lastRunStatus === "running" ||
+        parsed.lastRunStatus === "success" ||
+        parsed.lastRunStatus === "failed"
+          ? parsed.lastRunStatus
+          : "success";
+      this.snapshotLastRunReason =
+        typeof parsed.lastRunReason === "string" ? parsed.lastRunReason : undefined;
+      this.snapshotLastRunStartedAt =
+        typeof parsed.lastRunStartedAt === "string" ? parsed.lastRunStartedAt : undefined;
+      this.snapshotLastRunCompletedAt =
+        typeof parsed.lastRunCompletedAt === "string" ? parsed.lastRunCompletedAt : undefined;
+      this.snapshotRecoveryNeeded =
+        this.snapshotLastRunStatus === "running" || this.snapshotLastRunStatus === "failed";
+      this.logger?.info(
+        `openviking sync snapshot loaded: entries=${this.syncedSnapshot.size}, file=${this.snapshotFilePath}`
+      );
+    } catch (error) {
+      this.logger?.warn(`Failed to parse sync snapshot: ${String(error)}`);
+    }
+  }
+
+  private async persistSnapshot(): Promise<void> {
+    const entries: PersistedSyncStateEntry[] = [...this.syncedSnapshot.entries()]
+      .map(([relPath, snapshot]) => ({
+        relPath,
+        fingerprint: snapshot.fingerprint,
+        uri: snapshot.uri
+      }))
+      .sort((a, b) => a.relPath.localeCompare(b.relPath));
+
+    const payload: PersistedSyncState = {
+      version: 3,
+      agentId: this.agentId,
+      entries,
+      ovConfigPath: this.snapshotOvConfigPath,
+      ovConfigFingerprint: this.snapshotOvConfigFingerprint,
+      lastRunStatus: this.snapshotLastRunStatus,
+      lastRunReason: this.snapshotLastRunReason,
+      lastRunStartedAt: this.snapshotLastRunStartedAt,
+      lastRunCompletedAt: this.snapshotLastRunCompletedAt
+    };
+
+    const targetDir = path.dirname(this.snapshotFilePath);
+    await fs.mkdir(targetDir, { recursive: true });
+    const tmpPath = `${this.snapshotFilePath}.tmp-${process.pid}-${Date.now()}`;
+    await fs.writeFile(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+    await fs.rename(tmpPath, this.snapshotFilePath);
+  }
+
+  private isFsNotFoundError(error: unknown): boolean {
+    if (!error || typeof error !== "object") {
+      return false;
+    }
+    const code = (error as { code?: unknown }).code;
+    return code === "ENOENT";
+  }
+
+  private async syncFile(file: LocalSyncFile): Promise<void> {
+    const safeRelPath = file.relPath;
+    const fullPath = file.fullPath;
+    const desiredRootUri = file.desiredRootUri;
+    const targetParentUri = file.targetParentUri;
 
     this.logger?.debug?.(
       `openviking sync file relPath=${safeRelPath}, parent=${targetParentUri}, target=${desiredRootUri}`

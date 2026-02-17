@@ -34,6 +34,11 @@
       "advanced": true,
       "help": "Run one sync after plugin startup."
     },
+    "sync.ovConfigPath": {
+      "label": "ov.conf Path",
+      "advanced": true,
+      "help": "Optional ov.conf path. If the file fingerprint changes, the next sync runs a full resync."
+    },
     "sync.extraPaths": {
       "label": "Extra Paths",
       "advanced": true,
@@ -138,6 +143,9 @@
           },
           "onBoot": {
             "type": "boolean"
+          },
+          "ovConfigPath": {
+            "type": "string"
           },
           "extraPaths": {
             "type": "array",
