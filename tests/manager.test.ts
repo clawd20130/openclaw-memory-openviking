@@ -71,6 +71,10 @@ describe("OpenVikingMemoryManager sync.extraPaths", () => {
         );
       }
 
+      if (urlText.endsWith("/api/v1/fs/mkdir") && method === "POST") {
+        return okResponse({ uri: "" });
+      }
+
       if (urlText.endsWith("/api/v1/fs/mv") && method === "POST") {
         return okResponse({ from: "", to: "" });
       }
@@ -149,6 +153,10 @@ describe("OpenVikingMemoryManager sync.extraPaths", () => {
         });
       }
 
+      if (urlText.endsWith("/api/v1/fs/mkdir") && method === "POST") {
+        return okResponse({ uri: "" });
+      }
+
       if (urlText.includes("/api/v1/fs?") && method === "DELETE") {
         return new Response(
           JSON.stringify({
@@ -160,6 +168,161 @@ describe("OpenVikingMemoryManager sync.extraPaths", () => {
           }),
           {
             status: 500,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
+      if (urlText.endsWith("/api/v1/fs/mv") && method === "POST") {
+        moved += 1;
+        return okResponse({ from: "", to: "" });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlText}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = new OpenVikingMemoryManager({
+      config: {
+        baseUrl: "http://127.0.0.1:1933",
+        sync: {
+          onBoot: false
+        }
+      },
+      workspaceDir: workspace,
+      agentId: "main",
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined
+      }
+    });
+
+    await manager.sync({ reason: "test" });
+
+    assert.strictEqual(moved, 1);
+  });
+
+  it("creates target parent directory before move", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-parent-"));
+    await mkdir(path.join(workspace, "memory"), { recursive: true });
+    await writeFile(path.join(workspace, "memory", "daily-note.md"), "# note\n", "utf-8");
+
+    let moved = 0;
+    const mkdirUris: string[] = [];
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const urlText = String(url);
+      const method = init?.method ?? "GET";
+
+      if (urlText.endsWith("/api/v1/resources") && method === "POST") {
+        return okResponse({
+          status: "queued",
+          root_uri: "viking://resources/tmp/import-1",
+          source_path: path.join(workspace, "memory", "daily-note.md")
+        });
+      }
+
+      if (urlText.endsWith("/api/v1/fs/mkdir") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { uri?: string };
+        if (body.uri) {
+          mkdirUris.push(body.uri);
+        }
+        return okResponse({ uri: body.uri ?? "" });
+      }
+
+      if (urlText.includes("/api/v1/fs?") && method === "DELETE") {
+        return new Response(
+          JSON.stringify({
+            status: "error",
+            error: {
+              code: "NOT_FOUND",
+              message: "not found"
+            }
+          }),
+          {
+            status: 404,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
+      if (urlText.endsWith("/api/v1/fs/mv") && method === "POST") {
+        moved += 1;
+        return okResponse({ from: "", to: "" });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlText}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = new OpenVikingMemoryManager({
+      config: {
+        baseUrl: "http://127.0.0.1:1933",
+        sync: {
+          onBoot: false
+        }
+      },
+      workspaceDir: workspace,
+      agentId: "main",
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined
+      }
+    });
+
+    await manager.sync({ reason: "test" });
+
+    assert.ok(mkdirUris.includes("viking://resources/openclaw/main/memory-sync/memory/misc"));
+    assert.strictEqual(moved, 1);
+  });
+
+  it("continues sync when mkdir returns already-exists error", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-mkdir-exists-"));
+    await writeFile(path.join(workspace, "MEMORY.md"), "# memory\n", "utf-8");
+
+    let moved = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const urlText = String(url);
+      const method = init?.method ?? "GET";
+
+      if (urlText.endsWith("/api/v1/resources") && method === "POST") {
+        return okResponse({
+          status: "queued",
+          root_uri: "viking://resources/tmp/import-1",
+          source_path: path.join(workspace, "MEMORY.md")
+        });
+      }
+
+      if (urlText.endsWith("/api/v1/fs/mkdir") && method === "POST") {
+        return new Response(
+          JSON.stringify({
+            status: "error",
+            error: {
+              code: "INTERNAL_ERROR",
+              message: "directory already exists: /resources/openclaw/main/memory-sync/root"
+            }
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
+      if (urlText.includes("/api/v1/fs?") && method === "DELETE") {
+        return new Response(
+          JSON.stringify({
+            status: "error",
+            error: {
+              code: "NOT_FOUND",
+              message: "not found"
+            }
+          }),
+          {
+            status: 404,
             headers: { "Content-Type": "application/json" }
           }
         );

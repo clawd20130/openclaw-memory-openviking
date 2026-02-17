@@ -77,6 +77,42 @@ describe("OpenVikingClient", () => {
     assert.strictEqual(health.status, "ok");
   });
 
+  it("should call mkdir endpoint", async () => {
+    let calledUrl = "";
+    let calledInit: RequestInit | undefined;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      calledUrl = String(url);
+      calledInit = init;
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          result: {
+            uri: "viking://resources/openclaw/main/memory-sync/root"
+          }
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }) as unknown) as typeof fetch;
+
+    const client = new OpenVikingClient({
+      baseUrl: "http://127.0.0.1:1933"
+    });
+
+    await client.mkdir("viking://resources/openclaw/main/memory-sync/root");
+
+    assert.strictEqual(calledUrl, "http://127.0.0.1:1933/api/v1/fs/mkdir");
+    assert.strictEqual(calledInit?.method, "POST");
+    assert.strictEqual(
+      (calledInit?.body as string | undefined) ??
+        "",
+      JSON.stringify({ uri: "viking://resources/openclaw/main/memory-sync/root" })
+    );
+  });
+
   it("should throw OpenVikingHttpError on wrapped error response", async () => {
     globalThis.fetch = ((async () => {
       return new Response(

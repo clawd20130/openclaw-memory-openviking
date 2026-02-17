@@ -1,12 +1,12 @@
-# 示例
+# Examples
 
-## 安装
+## Install
 
 ```bash
 npm install -g @kevinzhow/openclaw-memory-openviking
 ```
 
-## 基本配置
+## Basic Configuration
 
 ```json5
 // ~/.openclaw/openclaw.config.json5
@@ -30,7 +30,7 @@ npm install -g @kevinzhow/openclaw-memory-openviking
 }
 ```
 
-## 自定义路径映射
+## Custom Path Mappings
 
 ```json5
 {
@@ -42,7 +42,7 @@ npm install -g @kevinzhow/openclaw-memory-openviking
         config: {
           baseUrl: "http://127.0.0.1:1933",
           mappings: {
-            // 自定义映射
+            // Custom mappings
             "work-notes.md": "viking://work/notes",
             "projects/*/README.md": "viking://projects/{name}/readme"
           }
@@ -53,10 +53,10 @@ npm install -g @kevinzhow/openclaw-memory-openviking
 }
 ```
 
-## 使用环境变量
+## Environment Variables
 
 ```bash
-# ~/.bashrc 或 ~/.zshrc
+# ~/.bashrc or ~/.zshrc
 export OPENVIKING_URL="http://127.0.0.1:1933"
 export OPENVIKING_API_KEY="your-api-key"
 ```
@@ -77,17 +77,17 @@ export OPENVIKING_API_KEY="your-api-key"
 }
 ```
 
-## 多 Agent 配置
+## Multi-agent Configuration
 
 ```json5
 {
   agents: {
     defaults: {
-      // 所有 agent 默认使用 OpenViking
+      // All agents use OpenViking memory by default
     },
     entries: {
       "special-agent": {
-        // 这个 agent 使用内置 memory
+        // This agent uses built-in memory
         plugins: {
           slots: { memory: "none" }
         }

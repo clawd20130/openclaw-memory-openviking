@@ -1,39 +1,39 @@
 # OpenClaw Memory Plugin for OpenViking
 
-把 OpenViking 作为 OpenClaw 的 memory 插件，提供 `memory_search` 和 `memory_get` 两个工具。
+Use OpenViking as the OpenClaw memory backend, exposing `memory_search` and `memory_get` tools.
 
-## 当前状态
+## Current Status
 
-- 插件 id：`openclaw-memory-openviking`
-- npm 包名：`@kevinzhow/openclaw-memory-openviking`
-- 兼容 OpenClaw：`>=2026.2.15`
-- 开发默认 OpenViking 地址：`http://127.0.0.1:1933`
+- Plugin ID: `openclaw-memory-openviking`
+- npm package: `@kevinzhow/openclaw-memory-openviking`
+- OpenClaw compatibility: `>=2026.2.15`
+- Default OpenViking endpoint used in development: `http://127.0.0.1:1933`
 
-## 功能
+## Features
 
-- 使用 OpenViking 检索：`/api/v1/search/find` 或 `/api/v1/search/search`
-- 使用 OpenViking 读取：`/api/v1/content/read`、`/api/v1/content/overview`
-- 支持本地记忆文件同步到 OpenViking：`/api/v1/resources` + `/api/v1/fs/mv`
-- OpenViking 不可读时，`memory_get` 自动回退本地文件读取
+- Search via OpenViking: `POST /api/v1/search/find` or `POST /api/v1/search/search`
+- Read content via OpenViking: `GET /api/v1/content/read`, `GET /api/v1/content/overview`
+- Sync local memory files to OpenViking using `POST /api/v1/resources` + `POST /api/v1/fs/mkdir` + `POST /api/v1/fs/mv`
+- Automatically falls back to local file reads when OpenViking reads fail
 
-## 安装
+## Installation
 
-### 方式 1：npm
+### Option 1: npm
 
 ```bash
 npm install @kevinzhow/openclaw-memory-openviking
 ```
 
-### 方式 2：本地开发
+### Option 2: local development
 
 ```bash
-git clone https://github.com/kevinzhow/openclaw-memory-openviking.git
+git clone https://github.com/clawd20130/openclaw-memory-openviking.git
 cd openclaw-memory-openviking
 npm install
 npm run build
 ```
 
-## OpenClaw 配置
+## OpenClaw Configuration
 
 ```json5
 {
@@ -43,7 +43,7 @@ npm run build
       memory: "openclaw-memory-openviking"
     },
     load: {
-      // 本地开发时可用
+      // Useful for local development
       paths: ["/path/to/openviking-memory-plugin"]
     },
     entries: {
@@ -53,7 +53,7 @@ npm run build
           baseUrl: "http://127.0.0.1:1933",
           apiKey: "optional-api-key",
 
-          // 可选：默认 viking://resources/openclaw/{agentId}
+          // Optional: defaults to viking://resources/openclaw/{agentId}
           uriBase: "viking://resources/openclaw/{agentId}",
 
           tieredLoading: true,
@@ -79,27 +79,29 @@ npm run build
 }
 ```
 
-## 配置项说明
+## Configuration Reference
 
-- `baseUrl`：OpenViking HTTP 地址，必填。
-- `apiKey`：可选，若服务开启鉴权可填写。
-- `uriBase`：资源根路径，支持 `{agentId}` 占位符。
-- `tieredLoading`：`true` 时，`memory_get` 在未指定行号优先走 overview。
-- `sync.interval`：周期同步间隔（例如 `30s`、`5m`、`1h`、`1d`）。
-- `sync.onBoot`：插件加载后是否先做一次同步。
-- `sync.extraPaths`：额外同步目录/文件（相对 workspace，目录会递归扫描 `.md`）。
-- `sync.waitForProcessing`：同步后是否等待 OpenViking 队列完成。
-- `sync.waitTimeoutSec`：等待超时时间（秒）。
-- `search.mode`：`find`（默认）或 `search`（带 session 语义）。
-- `search.defaultLimit`：默认返回条数。
-- `search.scoreThreshold`：最小分数阈值。
-- `search.targetUri`：限制检索范围。
-- `server.enabled`：是否由插件自动拉起 OpenViking。
-- `server.venvPath`：`server.enabled=true` 时必填。
+- `baseUrl`: OpenViking HTTP endpoint (required).
+- `apiKey`: optional API key when auth is enabled.
+- `uriBase`: resource root URI, supports `{agentId}` placeholder.
+- `tieredLoading`: when `true`, `memory_get` prefers `overview` when no line range is requested.
+- `sync.interval`: periodic sync interval (for example `30s`, `5m`, `1h`, `1d`).
+- `sync.onBoot`: run a sync immediately after plugin startup.
+- `sync.extraPaths`: additional files/directories to sync (workspace-relative; directories are scanned recursively for `.md`).
+- `sync.waitForProcessing`: wait for OpenViking processing queue to drain after sync.
+- `sync.waitTimeoutSec`: wait timeout in seconds.
+- `search.mode`: `find` (default) or `search` (session-aware).
+- `search.defaultLimit`: default max result count.
+- `search.scoreThreshold`: minimum score threshold.
+- `search.targetUri`: restrict search scope.
+- `server.enabled`: whether plugin auto-starts an OpenViking process.
+- `server.venvPath`: required when `server.enabled=true`.
 
-## 默认路径映射
+## Default Path Mapping
 
-默认以 `viking://resources/openclaw/{agentId}/memory-sync` 为根，内置映射包括：
+Default root: `viking://resources/openclaw/{agentId}/memory-sync`
+
+Built-in mappings:
 
 - `MEMORY.md` -> `.../root/MEMORY`
 - `SOUL.md` -> `.../root/SOUL`
@@ -110,61 +112,66 @@ npm run build
 - `BOOTSTRAP.md` -> `.../root/BOOTSTRAP`
 - `memory/YYYY-MM-DD.md` -> `.../memory/{date}`
 - `skills/*/SKILL.md` -> `.../skills/{name}/SKILL`
-- 其他文件 -> `.../files/{path}`
+- other files -> `.../files/{path}`
 
-## 验证
+## Validation
 
-先确认 OpenViking 服务可用：
+Verify OpenViking health:
 
 ```bash
 curl -sS http://127.0.0.1:1933/health
 ```
 
-确认 OpenClaw 成功加载插件：
+Verify OpenClaw loaded this plugin:
 
 ```bash
 openclaw plugins info openclaw-memory-openviking --json
 ```
 
-输出里应包含：
+Expected output includes:
 
 - `"status": "loaded"`
 - `"toolNames": ["memory_search", "memory_get"]`
 
-## 开发
+## Development
 
 ```bash
 npm run build
 npm test
 ```
 
-测试包含：
+Test suite includes:
 
 - `tests/client.test.ts`
 - `tests/mapper.test.ts`
 - `tests/plugin.test.ts`
+- `tests/manager.test.ts`
 
-## 常见问题
+## Troubleshooting
 
 ### 1) plugin id mismatch
 
-请确保配置里的 slot/entry 使用同一个 id：
+Make sure your slot and entry use the same plugin ID:
 
 - `plugins.slots.memory = "openclaw-memory-openviking"`
 - `plugins.entries["openclaw-memory-openviking"]`
 
 ### 2) `baseUrl is required`
 
-未配置 `plugins.entries["openclaw-memory-openviking"].config.baseUrl`。
+`plugins.entries["openclaw-memory-openviking"].config.baseUrl` is missing.
 
-### 3) `connection refused` 到 1933
+### 3) `connection refused` to port `1933`
 
-OpenViking 服务未启动，或端口/地址不匹配。
+OpenViking is not running, or host/port does not match configuration.
 
-### 4) `memory_get` 返回本地文件不存在
+### 4) `plugin path not found: ~/.openclaw/plugins`
 
-调用上下文缺少正确 `workspaceDir` 时会回退到插件进程当前目录读取本地文件。请在 OpenClaw 正常 agent/session 上下文里调用，或确保读取路径在当前工作目录存在。
+Ensure each path listed in `plugins.load.paths` exists on disk, or remove unused paths.
 
-## 许可证
+### 5) `memory_get` falls back and then says local file not found
+
+If the call context does not provide a valid `workspaceDir`, local fallback reads from the plugin process working directory. Run in a normal OpenClaw agent/session context, or ensure the target file exists in the current working directory.
+
+## License
 
 MIT

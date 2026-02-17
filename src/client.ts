@@ -233,6 +233,17 @@ export class OpenVikingClient {
   }
 
   /**
+   * 创建目录
+   */
+  async mkdir(uri: string): Promise<void> {
+    await this.request<{ uri: string }>({
+      method: "POST",
+      path: "/api/v1/fs/mkdir",
+      body: { uri }
+    });
+  }
+
+  /**
    * 删除资源
    */
   async remove(uri: string, recursive = false): Promise<void> {

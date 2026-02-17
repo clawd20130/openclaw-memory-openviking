@@ -1,37 +1,37 @@
 # AGENTS.md
 
-本文件面向在本仓库工作的开发代理（human/AI）。目标是减少回归、保证插件与 OpenClaw/OpenViking API 一致。
+This file is for development agents (human or AI) working in this repository. The goal is to reduce regressions and keep behavior aligned with OpenClaw and OpenViking APIs.
 
-## 1. 仓库定位
+## 1. Repository Scope
 
-- 项目：OpenClaw memory 插件（OpenViking 后端）。
-- 运行时注册工具：`memory_search`、`memory_get`。
-- 插件 canonical id：`openclaw-memory-openviking`。
-- npm 包名：`@kevinzhow/openclaw-memory-openviking`。
+- Project: OpenClaw memory plugin backed by OpenViking.
+- Runtime tools: `memory_search`, `memory_get`.
+- Canonical plugin ID: `openclaw-memory-openviking`.
+- npm package name: `@kevinzhow/openclaw-memory-openviking`.
 
-## 2. 关键一致性约束
+## 2. Critical Consistency Rules
 
-以下字段必须保持一致，否则容易出现加载警告或配置失效：
+The following fields must stay consistent to avoid load warnings or invalid config:
 
-- `src/index.ts` 中 `plugin.id`
-- `openclaw.plugin.json` 中 `id`
-- 文档和示例中的 `plugins.slots.memory`
-- 文档和示例中的 `plugins.entries.<id>`
+- `plugin.id` in `src/index.ts`
+- `id` in `openclaw.plugin.json`
+- `plugins.slots.memory` in docs/examples/config snippets
+- `plugins.entries.<id>` in docs/examples/config snippets
 
-当前正确值：`openclaw-memory-openviking`。
+Correct value: `openclaw-memory-openviking`.
 
-## 3. 核心代码结构
+## 3. Core Code Layout
 
-- `src/index.ts`：插件入口、config 解析、工具注册、周期同步、关闭清理。
-- `src/client.ts`：OpenViking HTTP 客户端与错误包装。
-- `src/manager.ts`：`MemorySearchManager` 实现（search/read/sync/probe）。
-- `src/mapper.ts`：本地路径与 OpenViking URI 的映射规则。
-- `src/types.ts`：插件配置与 OpenViking API 类型。
-- `openclaw.plugin.json`：OpenClaw manifest（schema + uiHints）。
+- `src/index.ts`: plugin entry, config parsing, tool registration, periodic sync, shutdown handling.
+- `src/client.ts`: OpenViking HTTP client and error wrapping.
+- `src/manager.ts`: `MemorySearchManager` implementation (`search`, `readFile`, `sync`, probes).
+- `src/mapper.ts`: local-path to OpenViking-URI mapping rules.
+- `src/types.ts`: plugin config and OpenViking API types.
+- `openclaw.plugin.json`: OpenClaw manifest (`configSchema` + `configUiHints`).
 
-## 4. OpenViking API 约束
+## 4. OpenViking API Contract
 
-当前实现依赖以下接口（变更时必须同步代码和测试）：
+Current implementation depends on these endpoints. If any endpoint behavior changes, update code and tests together:
 
 - `GET /health`
 - `GET /api/v1/system/status`
@@ -41,67 +41,68 @@
 - `GET /api/v1/content/overview`
 - `GET /api/v1/content/abstract`
 - `POST /api/v1/resources`
+- `POST /api/v1/fs/mkdir`
 - `DELETE /api/v1/fs`
 - `POST /api/v1/fs/mv`
 - `POST /api/v1/system/wait`
 
-## 5. 配置模型约束
+## 5. Configuration Model Constraints
 
-允许的配置字段以 `src/index.ts` 的 `configSchema` 与 `openclaw.plugin.json` 为准。
+Allowed config fields are defined by `configSchema` in `src/index.ts` and `openclaw.plugin.json`.
 
-注意：不要在文档或示例中引入已删除/不存在字段（例如 `autoLayering`、`debounceMs`、`search.mode=hybrid`）。
+Do not introduce removed/unsupported fields in docs or examples (for example `autoLayering`, `debounceMs`, `search.mode=hybrid`).
 
-## 6. 开发与验证流程
+## 6. Build and Validation Workflow
 
-安装与构建：
+Install and build:
 
 ```bash
 npm install
 npm run build
 ```
 
-测试：
+Run tests:
 
 ```bash
 npm test
 ```
 
-测试必须全部通过（当前 13 tests）。
+All tests must pass before shipping changes (currently 19 tests).
 
-## 7. 集成冒烟测试（本地 OpenViking）
+## 7. Local Integration Smoke Test (OpenViking)
 
-默认使用：`http://127.0.0.1:1933`。
+Default endpoint: `http://127.0.0.1:1933`.
 
-建议最小验证：
+Minimal checks:
 
 ```bash
 curl -sS http://127.0.0.1:1933/health
 openclaw plugins info openclaw-memory-openviking --json
 ```
 
-成功标准：
+Success criteria:
 
-- OpenViking 健康检查返回 `ok`
-- 插件状态为 `loaded`
-- `toolNames` 包含 `memory_search`、`memory_get`
+- OpenViking health returns `ok`
+- Plugin status is `loaded`
+- `toolNames` contains `memory_search` and `memory_get`
 
-## 8. 修改规则（Do/Don’t）
+## 8. Change Rules (Do / Don't)
 
 Do:
 
-- 修改 config 结构时，至少同步：`src/types.ts`、`src/index.ts`、`openclaw.plugin.json`、`README.md`、相关 tests。
-- 修改 API 调用时，补充/更新 `tests/client.test.ts` 和 `tests/plugin.test.ts`。
-- 保持 TypeScript strict 兼容，不引入 `any` 泄漏。
+- When changing config structure, update at least: `src/types.ts`, `src/index.ts`, `openclaw.plugin.json`, `README.md`, and related tests.
+- When changing API calls, add or update tests in `tests/client.test.ts` and `tests/plugin.test.ts`.
+- Keep TypeScript strict compatibility; do not leak `any`.
 
-Don’t:
+Don't:
 
-- 不要只改 manifest 或只改 runtime id。
-- 不要在示例里写与 schema 不一致的字段。
-- 不要跳过测试就提交对外行为变更。
+- Do not update only the manifest ID or only runtime ID.
+- Do not put schema-inconsistent fields in examples.
+- Do not skip tests for externally visible behavior changes.
 
-## 9. 提交前检查清单
+## 9. Pre-commit Checklist
 
-- `npm run build` 成功。
-- `npm test` 全通过。
-- `openclaw.plugin.json` 与 `src/index.ts` 的 id 一致。
-- README 配置片段可直接运行，字段与 schema 一致。
+- `npm run build` succeeds.
+- `npm test` passes.
+- `id` in `openclaw.plugin.json` matches `plugin.id` in `src/index.ts`.
+- README config snippets are runnable and schema-consistent.

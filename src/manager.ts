@@ -438,6 +438,7 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     const safeRelPath = this.ensureSafeRelPath(relPath);
     const fullPath = path.join(this.workspaceDir, safeRelPath);
     const desiredRootUri = this.mapper.toVikingUri(safeRelPath);
+    const targetParentUri = this.mapper.toTargetParentUri(safeRelPath);
     const stagingUri = this.mapper.getStagingUri();
 
     this.logger?.debug?.(
@@ -456,8 +457,21 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
       throw new Error(`OpenViking import result missing root_uri: ${safeRelPath}`);
     }
 
+    await this.ensureTargetParent(targetParentUri);
     await this.tryRemove(desiredRootUri);
     await this.client.move(importedRoot, desiredRootUri);
+  }
+
+  private async ensureTargetParent(uri: string): Promise<void> {
+    try {
+      await this.client.mkdir(uri);
+    } catch (error) {
+      if (this.shouldIgnoreExistingPathError(error)) {
+        this.logger?.debug?.(`openviking mkdir skipped (already exists): ${uri}`);
+        return;
+      }
+      throw error;
+    }
   }
 
   private async tryRemove(uri: string): Promise<void> {
@@ -496,12 +510,44 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     return false;
   }
 
+  private shouldIgnoreExistingPathError(error: unknown): boolean {
+    if (error instanceof OpenVikingHttpError) {
+      if (error.status === 409) {
+        return true;
+      }
+      if (typeof error.code === "string" && /already[_-]?exists/i.test(error.code)) {
+        return true;
+      }
+      const message = [
+        error.message,
+        error.details ? JSON.stringify(error.details) : ""
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return this.looksLikeExistingPath(message);
+    }
+
+    if (error instanceof Error) {
+      return this.looksLikeExistingPath(error.message.toLowerCase());
+    }
+    return false;
+  }
+
   private looksLikeMissingPath(text: string): boolean {
     return (
       text.includes("no such file or directory") ||
       text.includes("no such directory") ||
       text.includes("not found") ||
       text.includes("path not found")
+    );
+  }
+
+  private looksLikeExistingPath(text: string): boolean {
+    return (
+      text.includes("already exists") ||
+      text.includes("file exists") ||
+      text.includes("directory exists")
     );
   }
 }
