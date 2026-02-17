@@ -1,0 +1,35 @@
+{
+  "plugins": {
+    "slots": {
+      "memory": "openviking"
+    },
+    "load": {
+      "paths": ["~/.openclaw/plugins"]
+    },
+    "entries": {
+      "openviking": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://localhost:8080",
+          "tieredLoading": true,
+          "autoLayering": true,
+          "mappings": {
+            "MEMORY.md": "viking://user/memories/longterm",
+            "SOUL.md": "viking://user/preferences/persona",
+            "USER.md": "viking://user/preferences/profile",
+            "AGENTS.md": "viking://agent/config/agents"
+          },
+          "sync": {
+            "interval": "5m",
+            "onBoot": true,
+            "debounceMs": 5000
+          },
+          "search": {
+            "mode": "hybrid",
+            "defaultLimit": 5
+          }
+        }
+      }
+    }
+  }
+}

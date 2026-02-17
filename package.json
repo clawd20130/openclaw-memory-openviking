@@ -1,0 +1,48 @@
+{
+  "name": "@openclaw/memory-openviking",
+  "version": "0.1.0",
+  "description": "OpenViking context database as memory backend for OpenClaw",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node --test dist/tests/**/*.js",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "memory",
+    "openviking",
+    "context-database",
+    "agent-memory"
+  ],
+  "author": "Kevin Zhow",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kevinzhow/openclaw-memory-openviking.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kevinzhow/openclaw-memory-openviking/issues"
+  },
+  "homepage": "https://github.com/kevinzhow/openclaw-memory-openviking#readme",
+  "peerDependencies": {
+    "@openclaw/plugin-sdk": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
