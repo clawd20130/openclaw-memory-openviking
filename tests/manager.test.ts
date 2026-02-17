@@ -130,4 +130,68 @@ describe("OpenVikingMemoryManager sync.extraPaths", () => {
 
     await manager.sync({ reason: "test" });
   });
+
+  it("continues sync when delete returns 500 with missing-path message", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-rm-500-"));
+    await writeFile(path.join(workspace, "MEMORY.md"), "# memory\n", "utf-8");
+
+    let moved = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const urlText = String(url);
+      const method = init?.method ?? "GET";
+
+      if (urlText.endsWith("/api/v1/resources") && method === "POST") {
+        return okResponse({
+          status: "queued",
+          root_uri: "viking://resources/tmp/import-1",
+          source_path: path.join(workspace, "MEMORY.md")
+        });
+      }
+
+      if (urlText.includes("/api/v1/fs?") && method === "DELETE") {
+        return new Response(
+          JSON.stringify({
+            status: "error",
+            error: {
+              code: "INTERNAL_ERROR",
+              message: "no such file or directory: /user/preferences/profile"
+            }
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
+      if (urlText.endsWith("/api/v1/fs/mv") && method === "POST") {
+        moved += 1;
+        return okResponse({ from: "", to: "" });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlText}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = new OpenVikingMemoryManager({
+      config: {
+        baseUrl: "http://127.0.0.1:1933",
+        sync: {
+          onBoot: false
+        }
+      },
+      workspaceDir: workspace,
+      agentId: "main",
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined
+      }
+    });
+
+    await manager.sync({ reason: "test" });
+
+    assert.strictEqual(moved, 1);
+  });
 });

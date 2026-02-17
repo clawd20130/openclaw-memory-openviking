@@ -464,10 +464,44 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     try {
       await this.client.remove(uri, true);
     } catch (error) {
-      if (error instanceof OpenVikingHttpError && error.status === 404) {
+      if (this.shouldIgnoreMissingPathError(error)) {
+        this.logger?.debug?.(`openviking remove skipped (missing path): ${uri}`);
         return;
       }
       throw error;
     }
+  }
+
+  private shouldIgnoreMissingPathError(error: unknown): boolean {
+    if (error instanceof OpenVikingHttpError) {
+      if (error.status === 404) {
+        return true;
+      }
+      if (typeof error.code === "string" && /not[_-]?found/i.test(error.code)) {
+        return true;
+      }
+      const message = [
+        error.message,
+        error.details ? JSON.stringify(error.details) : ""
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return this.looksLikeMissingPath(message);
+    }
+
+    if (error instanceof Error) {
+      return this.looksLikeMissingPath(error.message.toLowerCase());
+    }
+    return false;
+  }
+
+  private looksLikeMissingPath(text: string): boolean {
+    return (
+      text.includes("no such file or directory") ||
+      text.includes("no such directory") ||
+      text.includes("not found") ||
+      text.includes("path not found")
+    );
   }
 }
