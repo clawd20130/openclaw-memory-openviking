@@ -4,10 +4,12 @@
  * 将 OpenViking 作为记忆后端，提供分层上下文管理和自我进化能力。
  */
 
+// Note: @openclaw/plugin-sdk is a peer dependency
+// The actual package name may vary based on OpenClaw SDK release
 import type { 
   OpenClawPluginDefinition,
   OpenClawPluginApi
-} from "@openclaw/plugin-sdk";
+} from "@kevinzhow/openclaw-plugin-sdk";
 import type { OpenVikingPluginConfig } from "./types.js";
 import { OpenVikingMemoryManager } from "./manager.js";
 

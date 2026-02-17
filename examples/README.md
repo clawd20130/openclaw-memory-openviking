@@ -1,5 +1,11 @@
 # 示例
 
+## 安装
+
+```bash
+npm install -g @kevinzhow/openclaw-memory-openviking
+```
+
 ## 基本配置
 
 ```json5
@@ -7,10 +13,10 @@
 {
   plugins: {
     slots: {
-      memory: "openviking"
+      memory: "@kevinzhow/openclaw-memory-openviking"
     },
     entries: {
-      openviking: {
+      "@kevinzhow/openclaw-memory-openviking": {
         enabled: true,
         config: {
           baseUrl: "http://localhost:8080"

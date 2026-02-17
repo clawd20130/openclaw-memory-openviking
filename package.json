@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/memory-openviking",
+  "name": "@kevinzhow/openclaw-memory-openviking",
   "version": "0.1.0",
   "description": "OpenViking context database as memory backend for OpenClaw",
   "type": "module",
@@ -29,14 +29,14 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kevinzhow/openclaw-memory-openviking.git"
+    "url": "git+https://github.com/kevinzhow/openclaw-memory-openviking.git"
   },
   "bugs": {
     "url": "https://github.com/kevinzhow/openclaw-memory-openviking/issues"
   },
   "homepage": "https://github.com/kevinzhow/openclaw-memory-openviking#readme",
   "peerDependencies": {
-    "@openclaw/plugin-sdk": ">=0.1.0"
+    "@kevinzhow/openclaw-plugin-sdk": ">=0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

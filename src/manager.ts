@@ -9,7 +9,7 @@ import type {
   MemorySyncProgressUpdate,
   MemoryEmbeddingProbeResult,
   MemorySource
-} from "@openclaw/plugin-sdk";
+} from "@kevinzhow/openclaw-plugin-sdk";
 import type { OpenVikingPluginConfig } from "./types.js";
 import { OpenVikingClient } from "./client.js";
 import { PathMapper } from "./mapper.js";

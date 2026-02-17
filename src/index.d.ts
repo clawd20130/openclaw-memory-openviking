@@ -3,7 +3,7 @@
  * 
  * @example
  * ```typescript
- * import openvikingPlugin from "@openclaw/memory-openviking";
+ * import openvikingPlugin from "@kevinzhow/openclaw-memory-openviking";
  * 
  * // 在 OpenClaw 配置中使用
  * {

@@ -14,7 +14,7 @@
 
 ```bash
 # 方法1: 全局安装
-npm install -g @openclaw/memory-openviking
+npm install -g @kevinzhow/openclaw-memory-openviking
 
 # 方法2: 本地路径加载
 git clone https://github.com/kevinzhow/openclaw-memory-openviking.git
