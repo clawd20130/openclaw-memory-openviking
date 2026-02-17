@@ -19,7 +19,10 @@ npm install -g @kevinzhow/openclaw-memory-openviking
       "openclaw-memory-openviking": {
         enabled: true,
         config: {
-          baseUrl: "http://127.0.0.1:1933"
+          baseUrl: "http://127.0.0.1:1933",
+          sync: {
+            extraPaths: ["notes", "docs/memory"]
+          }
         }
       }
     }

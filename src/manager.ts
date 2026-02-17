@@ -355,7 +355,83 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
       // ignore missing directory
     }
 
+    // 额外配置路径
+    for (const extraPath of this.config.sync?.extraPaths ?? []) {
+      await this.scanExtraPath(extraPath, files);
+    }
+
     return [...files].sort((a, b) => a.localeCompare(b));
+  }
+
+  private async scanExtraPath(rawPath: string, files: Set<string>): Promise<void> {
+    const relPath = this.resolveExtraPath(rawPath);
+    if (!relPath) {
+      return;
+    }
+
+    const absPath = relPath === "." ? this.workspaceDir : path.join(this.workspaceDir, relPath);
+    try {
+      const stat = await fs.lstat(absPath);
+      if (stat.isSymbolicLink()) {
+        this.logger?.warn(`Skip symlink extra path: ${rawPath}`);
+        return;
+      }
+      if (stat.isDirectory()) {
+        await this.collectMarkdownFiles(absPath, files);
+        return;
+      }
+      if (stat.isFile()) {
+        if (absPath.toLowerCase().endsWith(".md")) {
+          files.add(relPath);
+        } else {
+          this.logger?.warn(`Skip non-markdown extra file: ${rawPath}`);
+        }
+        return;
+      }
+      this.logger?.warn(`Skip unsupported extra path type: ${rawPath}`);
+    } catch (error) {
+      this.logger?.warn(`Skip missing/inaccessible extra path ${rawPath}: ${String(error)}`);
+    }
+  }
+
+  private resolveExtraPath(rawPath: string): string | null {
+    const trimmed = rawPath.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const absPath = path.isAbsolute(trimmed)
+      ? path.resolve(trimmed)
+      : path.resolve(this.workspaceDir, trimmed);
+    const relPath = path.relative(this.workspaceDir, absPath);
+    if (relPath.startsWith("..") || path.isAbsolute(relPath)) {
+      this.logger?.warn(`Skip extra path outside workspace: ${trimmed}`);
+      return null;
+    }
+    const normalized = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+    return normalized || ".";
+  }
+
+  private async collectMarkdownFiles(dir: string, files: Set<string>): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await this.collectMarkdownFiles(entryPath, files);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) {
+        continue;
+      }
+      const relPath = path.relative(this.workspaceDir, entryPath);
+      if (relPath.startsWith("..") || path.isAbsolute(relPath)) {
+        continue;
+      }
+      files.add(relPath.replace(/\\/g, "/"));
+    }
   }
 
   private async syncFile(relPath: string): Promise<void> {

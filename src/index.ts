@@ -58,6 +58,10 @@ const configSchema = {
       properties: {
         interval: { type: "string" },
         onBoot: { type: "boolean" },
+        extraPaths: {
+          type: "array",
+          items: { type: "string" }
+        },
         waitForProcessing: { type: "boolean" },
         waitTimeoutSec: { type: "number", minimum: 0 }
       }
@@ -128,6 +132,11 @@ const plugin = {
       "sync.onBoot": {
         label: "Sync On Boot",
         advanced: true
+      },
+      "sync.extraPaths": {
+        label: "Extra Paths",
+        advanced: true,
+        help: "额外同步目录/文件（相对 workspace，目录会递归扫描 .md）"
       },
       "sync.waitForProcessing": {
         label: "Wait For Processing",
@@ -365,6 +374,7 @@ function resolveConfig(raw: unknown): OpenVikingPluginConfig {
     sync: {
       interval: typeof syncRaw.interval === "string" ? syncRaw.interval : undefined,
       onBoot: typeof syncRaw.onBoot === "boolean" ? syncRaw.onBoot : true,
+      extraPaths: parseStringArray(syncRaw.extraPaths),
       waitForProcessing:
         typeof syncRaw.waitForProcessing === "boolean" ? syncRaw.waitForProcessing : false,
       waitTimeoutSec:
@@ -426,6 +436,19 @@ function parseInterval(interval?: string): number {
     d: 86_400_000
   };
   return amount * (multiplier[unit] ?? 0);
+}
+
+function parseStringArray(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const cleaned = raw
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  if (cleaned.length === 0) {
+    return undefined;
+  }
+  return [...new Set(cleaned)];
 }
 
 function readStringParam(params: Record<string, unknown>, key: string): string {

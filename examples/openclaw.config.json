@@ -12,7 +12,6 @@
         "config": {
           "baseUrl": "http://127.0.0.1:1933",
           "tieredLoading": true,
-          "autoLayering": true,
           "mappings": {
             "MEMORY.md": "viking://user/memories/longterm",
             "SOUL.md": "viking://user/preferences/persona",
@@ -22,10 +21,11 @@
           "sync": {
             "interval": "5m",
             "onBoot": true,
-            "debounceMs": 5000
+            "extraPaths": ["notes", "docs/memory"],
+            "waitForProcessing": false
           },
           "search": {
-            "mode": "hybrid",
+            "mode": "find",
             "defaultLimit": 5
           }
         }

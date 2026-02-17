@@ -31,6 +31,11 @@
       "label": "Sync On Boot",
       "advanced": true
     },
+    "sync.extraPaths": {
+      "label": "Extra Paths",
+      "advanced": true,
+      "help": "额外同步目录/文件（相对 workspace，目录会递归扫描 .md）"
+    },
     "sync.waitForProcessing": {
       "label": "Wait For Processing",
       "advanced": true
@@ -85,6 +90,12 @@
           },
           "onBoot": {
             "type": "boolean"
+          },
+          "extraPaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "waitForProcessing": {
             "type": "boolean"

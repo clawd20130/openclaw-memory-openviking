@@ -61,6 +61,7 @@ npm run build
           sync: {
             interval: "5m",
             onBoot: true,
+            extraPaths: ["notes", "docs/memory"],
             waitForProcessing: false,
             waitTimeoutSec: 60
           },
@@ -86,6 +87,7 @@ npm run build
 - `tieredLoading`：`true` 时，`memory_get` 在未指定行号优先走 overview。
 - `sync.interval`：周期同步间隔（例如 `30s`、`5m`、`1h`、`1d`）。
 - `sync.onBoot`：插件加载后是否先做一次同步。
+- `sync.extraPaths`：额外同步目录/文件（相对 workspace，目录会递归扫描 `.md`）。
 - `sync.waitForProcessing`：同步后是否等待 OpenViking 队列完成。
 - `sync.waitTimeoutSec`：等待超时时间（秒）。
 - `search.mode`：`find`（默认）或 `search`（带 session 语义）。
