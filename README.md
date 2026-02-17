@@ -81,21 +81,42 @@ npm run build
 
 ## Configuration Reference
 
-- `baseUrl`: OpenViking HTTP endpoint (required).
-- `apiKey`: optional API key when auth is enabled.
-- `uriBase`: resource root URI, supports `{agentId}` placeholder.
-- `tieredLoading`: when `true`, `memory_get` prefers `overview` when no line range is requested.
-- `sync.interval`: periodic sync interval (for example `30s`, `5m`, `1h`, `1d`).
-- `sync.onBoot`: run a sync immediately after plugin startup.
-- `sync.extraPaths`: additional files/directories to sync (workspace-relative; directories are scanned recursively for `.md`).
-- `sync.waitForProcessing`: wait for OpenViking processing queue to drain after sync.
-- `sync.waitTimeoutSec`: wait timeout in seconds.
-- `search.mode`: `find` (default) or `search` (session-aware).
-- `search.defaultLimit`: default max result count.
-- `search.scoreThreshold`: minimum score threshold.
-- `search.targetUri`: restrict search scope.
-- `server.enabled`: whether plugin auto-starts an OpenViking process.
-- `server.venvPath`: required when `server.enabled=true`.
+### Top-level fields
+
+- `baseUrl` (required): OpenViking HTTP endpoint.
+- `apiKey` (optional): API key used for `X-API-Key`/`Authorization` when auth is enabled.
+- `uriBase` (optional): root URI for synced content. Default is `viking://resources/openclaw/{agentId}`.
+- `tieredLoading` (default: `true`): for `memory_get` without line range, try `overview` first and fall back to full `read`.
+- `mappings` (optional): custom local-path -> OpenViking URI mapping overrides for specific files.
+
+### `search` fields
+
+- `search.mode` (default: `find`):
+  - `find`: stateless retrieval via `/api/v1/search/find`; best default for stable and low-latency memory lookup.
+  - `search`: session-aware retrieval via `/api/v1/search/search`; best when you want conversational continuity and session context is available.
+- `search.defaultLimit` (default: `6`): default result count when `memory_search.maxResults` is not passed.
+- `search.scoreThreshold` (default: `0`, range: `0..1`): minimum score to keep a result.
+- `search.targetUri` (optional): restrict search scope to one URI subtree.
+
+### `sync` fields
+
+- `sync.interval` (default: disabled): periodic sync interval, supported format is `^\\d+[smhd]$` (examples: `30s`, `5m`, `1h`, `1d`).
+- `sync.onBoot` (default: `true`): trigger one sync after plugin startup.
+- `sync.extraPaths` (optional): extra files/directories to sync. Paths are workspace-relative; directories are scanned recursively for `.md`.
+- `sync.waitForProcessing` (default: `false`): after syncing, wait for OpenViking queue processing to finish.
+- `sync.waitTimeoutSec` (optional): timeout used by `waitForProcessing`.
+
+### `server` fields (optional)
+
+If `server.enabled` is omitted/false, the plugin assumes OpenViking is already running at `baseUrl`.
+
+- `server.enabled`: auto-start and auto-stop OpenViking from this plugin process.
+- `server.venvPath` (required when `server.enabled=true`): Python venv root containing `openviking`.
+- `server.dataDir` (optional): passed as `--data-dir`.
+- `server.host` (default: `127.0.0.1`): host for auto-started OpenViking.
+- `server.port` (default: `1933`): port for auto-started OpenViking.
+- `server.startupTimeoutMs` (default: `30000`): startup health-check timeout.
+- `server.env` (optional): extra environment variables for OpenViking process.
 
 ## Default Path Mapping
 
