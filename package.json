@@ -1,6 +1,6 @@
 {
   "name": "@kevinzhow/openclaw-memory-openviking",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenViking context database as memory backend for OpenClaw",
   "type": "module",
   "main": "./dist/index.js",

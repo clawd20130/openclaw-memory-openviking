@@ -97,7 +97,7 @@ const plugin = {
   id: "openclaw-memory-openviking",
   name: "OpenViking Memory",
   description: "OpenViking-backed memory_search/memory_get tools for OpenClaw",
-  version: "0.1.0",
+  version: "0.1.1",
   kind: "memory",
   configSchema: {
     jsonSchema: configSchema,
