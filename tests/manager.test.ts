@@ -382,6 +382,171 @@ describe("OpenVikingMemoryManager sync.extraPaths", () => {
     assert.strictEqual(deleteCount, 0);
   });
 
+  it("joins concurrent sync calls to avoid duplicate imports", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-concurrent-"));
+    await writeFile(path.join(workspace, "MEMORY.md"), "# memory\n", "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const existing = new Set<string>([
+      "viking://resources/openclaw/main/memory-sync",
+      "viking://resources/openclaw/main/memory-sync/root"
+    ]);
+    let importCount = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: true });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { uri?: string };
+        if (body.uri) {
+          existing.add(body.uri);
+        }
+        return okResponse({ uri: body.uri ?? "" });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        existing.delete(uri);
+        return okResponse({ uri });
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        importCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        existing.add(desiredUri);
+        const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string; target?: string };
+        return okResponse({
+          status: "queued",
+          root_uri: `${body.target}/${basenameWithoutExt(body.path ?? "")}`,
+          source_path: body.path ?? ""
+        });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = createTestManager(workspace);
+    await Promise.all([manager.sync({ reason: "manual-a" }), manager.sync({ reason: "manual-b" })]);
+
+    assert.strictEqual(importCount, 1);
+  });
+
+  it("adopts remote snapshot when local snapshot is missing and content matches", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-adopt-remote-"));
+    const localContent = "# memory\nline1\nline2\n";
+    await writeFile(path.join(workspace, "MEMORY.md"), localContent, "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const rootPrefix = "viking://resources/openclaw/main/memory-sync";
+    const existing = new Set<string>([rootPrefix, "viking://resources/openclaw/main/memory-sync/root", desiredUri]);
+    let importCount = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: true });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/content/read" && method === "GET") {
+        return okResponse(localContent);
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        importCount += 1;
+        throw new Error("resource import should be skipped when remote content matches");
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        throw new Error("mkdir is not expected when adoption succeeds");
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        throw new Error("delete is not expected when adoption succeeds");
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = createTestManager(workspace);
+    await manager.sync({ reason: "test" });
+
+    assert.strictEqual(importCount, 0);
+  });
+
+  it("syncs file when remote snapshot content mismatches", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-adopt-mismatch-"));
+    await writeFile(path.join(workspace, "MEMORY.md"), "# local\n", "utf-8");
+
+    const desiredUri = "viking://resources/openclaw/main/memory-sync/root/MEMORY";
+    const rootPrefix = "viking://resources/openclaw/main/memory-sync";
+    const existing = new Set<string>([rootPrefix, "viking://resources/openclaw/main/memory-sync/root", desiredUri]);
+    let importCount = 0;
+
+    globalThis.fetch = ((async (url: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const urlObj = new URL(String(url));
+
+      if (urlObj.pathname === "/api/v1/fs/stat" && method === "GET") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        if (existing.has(uri)) {
+          return okResponse({ uri, isDir: true });
+        }
+        return notFoundResponse(`Resource not found: ${uri}`);
+      }
+
+      if (urlObj.pathname === "/api/v1/content/read" && method === "GET") {
+        return okResponse("# remote\n");
+      }
+
+      if (urlObj.pathname === "/api/v1/fs/mkdir" && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { uri?: string };
+        if (body.uri) {
+          existing.add(body.uri);
+        }
+        return okResponse({ uri: body.uri ?? "" });
+      }
+
+      if (urlObj.pathname === "/api/v1/fs" && method === "DELETE") {
+        const uri = urlObj.searchParams.get("uri") ?? "";
+        existing.delete(uri);
+        return okResponse({ uri });
+      }
+
+      if (urlObj.pathname === "/api/v1/resources" && method === "POST") {
+        importCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string; target?: string };
+        existing.add(desiredUri);
+        return okResponse({
+          status: "queued",
+          root_uri: `${body.target}/${basenameWithoutExt(body.path ?? "")}`,
+          source_path: body.path ?? ""
+        });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlObj.toString()}`);
+    }) as unknown) as typeof fetch;
+
+    const manager = createTestManager(workspace);
+    await manager.sync({ reason: "test" });
+
+    assert.strictEqual(importCount, 1);
+  });
+
   it("forces full sync when ov.conf fingerprint changes", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "openviking-manager-ovconf-"));
     await writeFile(path.join(workspace, "MEMORY.md"), "# memory\n", "utf-8");

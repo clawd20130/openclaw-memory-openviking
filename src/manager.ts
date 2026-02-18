@@ -66,6 +66,11 @@ interface OvConfigState {
 }
 
 type PersistedSyncLastRunStatus = "running" | "success" | "failed";
+type SyncParams = {
+  reason?: string;
+  force?: boolean;
+  progress?: (update: MemorySyncProgressUpdate) => void;
+};
 
 export class OpenVikingMemoryManager implements MemorySearchManager {
   private readonly client: OpenVikingClient;
@@ -86,6 +91,7 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
   private snapshotLastRunStartedAt?: string;
   private snapshotLastRunCompletedAt?: string;
   private snapshotRecoveryNeeded = false;
+  private syncInFlight: Promise<void> | null = null;
 
   constructor(options: OpenVikingMemoryManagerOptions) {
     this.config = options.config;
@@ -211,12 +217,26 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     };
   }
 
-  async sync(params?: {
-    reason?: string;
-    force?: boolean;
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void> {
+  async sync(params?: SyncParams): Promise<void> {
     this.ensureOpen();
+    if (this.syncInFlight) {
+      this.logger?.info(
+        `openviking sync join in-flight run: reason=${params?.reason ?? "manual"}`
+      );
+      await this.syncInFlight;
+      return;
+    }
+
+    const inFlight = this.runSync(params).finally(() => {
+      if (this.syncInFlight === inFlight) {
+        this.syncInFlight = null;
+      }
+    });
+    this.syncInFlight = inFlight;
+    await inFlight;
+  }
+
+  private async runSync(params?: SyncParams): Promise<void> {
     await this.ensureSnapshotLoaded();
 
     const syncReason = params?.reason ?? "manual";
@@ -253,18 +273,47 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
       const staleEntries = [...this.syncedSnapshot.entries()].filter(
         ([relPath]) => !localByPath.has(relPath)
       );
-      const filesToSync = forceFullSync
-        ? localFiles
-        : localFiles.filter((file) => {
-            const previous = this.syncedSnapshot.get(file.relPath);
-            if (!previous) {
-              return true;
-            }
-            if (previous.fingerprint !== file.fingerprint) {
-              return true;
-            }
-            return this.normalizeUri(previous.uri) !== this.normalizeUri(file.desiredRootUri);
-          });
+      const filesToSync: LocalSyncFile[] = [];
+      let reconciledCount = 0;
+      let attemptRemoteAdoption = false;
+      if (!forceFullSync && this.syncedSnapshot.size === 0) {
+        attemptRemoteAdoption = await this.pathExists(this.mapper.getRootPrefix()).catch((error) => {
+          this.logger?.warn(`Failed to probe remote root for snapshot adoption: ${String(error)}`);
+          return false;
+        });
+      }
+      for (const file of localFiles) {
+        if (forceFullSync) {
+          filesToSync.push(file);
+          continue;
+        }
+
+        const previous = this.syncedSnapshot.get(file.relPath);
+        if (previous) {
+          if (
+            previous.fingerprint !== file.fingerprint ||
+            this.normalizeUri(previous.uri) !== this.normalizeUri(file.desiredRootUri)
+          ) {
+            filesToSync.push(file);
+          }
+          continue;
+        }
+
+        if (
+          attemptRemoteAdoption &&
+          (await this.tryAdoptRemoteSnapshot(file).catch((error) => {
+            this.logger?.warn(
+              `Failed to adopt remote snapshot for ${file.relPath}: ${String(error)}`
+            );
+            return false;
+          }))
+        ) {
+          reconciledCount += 1;
+          continue;
+        }
+
+        filesToSync.push(file);
+      }
       const total = filesToSync.length + staleEntries.length;
       let completed = 0;
       let syncedCount = 0;
@@ -275,7 +324,7 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
       this.snapshotOvConfigFingerprint = ovConfigState.fingerprint;
 
       this.logger?.info(
-        `openviking sync started: reason=${syncReason}, force=${forceFullSync}, scanned=${localFiles.length}, upsert=${filesToSync.length}, delete=${staleEntries.length}, skipped=${skippedCount}`
+        `openviking sync started: reason=${syncReason}, force=${forceFullSync}, scanned=${localFiles.length}, upsert=${filesToSync.length}, delete=${staleEntries.length}, skipped=${skippedCount}, reconciled=${reconciledCount}`
       );
       params?.progress?.({ completed, total, label: "Scanning memory files..." });
 
@@ -343,7 +392,7 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
       this.lastSyncAt = new Date();
       params?.progress?.({ completed: total, total, label: "Sync completed" });
       this.logger?.info(
-        `openviking sync finished: scanned=${localFiles.length}, synced=${syncedCount}, removed=${removedCount}, skipped=${skippedCount}`
+        `openviking sync finished: scanned=${localFiles.length}, synced=${syncedCount}, removed=${removedCount}, skipped=${skippedCount}, reconciled=${reconciledCount}`
       );
 
       if (syncHadErrors) {
@@ -811,6 +860,43 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     await fs.rename(tmpPath, this.snapshotFilePath);
   }
 
+  private async tryAdoptRemoteSnapshot(file: LocalSyncFile): Promise<boolean> {
+    if (!(await this.pathExists(file.desiredRootUri))) {
+      return false;
+    }
+
+    const contentUri = this.mapper.toContentUri(file.relPath);
+    let remoteText = "";
+    try {
+      remoteText = await this.client.read(contentUri);
+    } catch (error) {
+      this.logger?.debug?.(
+        `openviking adopt skipped (remote content unavailable): ${file.relPath} ${String(error)}`
+      );
+      return false;
+    }
+
+    let localText = "";
+    try {
+      localText = await fs.readFile(file.fullPath, "utf-8");
+    } catch (error) {
+      this.logger?.warn(`Failed to read local file during adoption ${file.relPath}: ${String(error)}`);
+      return false;
+    }
+
+    if (this.contentHash(localText) !== this.contentHash(remoteText)) {
+      this.logger?.debug?.(`openviking adopt skipped (content mismatch): ${file.relPath}`);
+      return false;
+    }
+
+    this.syncedSnapshot.set(file.relPath, {
+      fingerprint: file.fingerprint,
+      uri: file.desiredRootUri
+    });
+    this.logger?.debug?.(`openviking adopted remote snapshot: ${file.relPath}`);
+    return true;
+  }
+
   private isFsNotFoundError(error: unknown): boolean {
     if (!error || typeof error !== "object") {
       return false;
@@ -901,6 +987,10 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
 
   private normalizeUri(uri: string): string {
     return uri.replace(/\/+$/, "");
+  }
+
+  private contentHash(text: string): string {
+    return createHash("sha256").update(text).digest("hex");
   }
 
   private shouldIgnoreMissingPathError(error: unknown): boolean {
