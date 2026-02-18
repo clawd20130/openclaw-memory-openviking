@@ -117,7 +117,7 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
 
     const limit = Math.max(1, opts?.maxResults ?? this.config.search?.defaultLimit ?? 6);
     const threshold = opts?.minScore ?? this.config.search?.scoreThreshold ?? 0;
-    const mode = this.config.search?.mode ?? "find";
+    const mode = this.config.search?.mode ?? "search";
     const targetUri = this.config.search?.targetUri ?? this.mapper.getRootPrefix();
 
     this.logger?.debug?.(
@@ -199,7 +199,7 @@ export class OpenVikingMemoryManager implements MemorySearchManager {
     return {
       backend: "builtin",
       provider: "openviking",
-      model: this.config.search?.mode ?? "find",
+      model: this.config.search?.mode ?? "search",
       workspaceDir: this.workspaceDir,
       custom: {
         baseUrl: this.config.baseUrl,

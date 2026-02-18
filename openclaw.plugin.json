@@ -57,7 +57,7 @@
     "search.mode": {
       "label": "Search Mode",
       "advanced": true,
-      "help": "find: stateless retrieval (default). search: session-aware retrieval when session context is available."
+      "help": "search: session-aware retrieval (default). find: stateless retrieval for low-latency lookups."
     },
     "search.defaultLimit": {
       "label": "Default Limit",

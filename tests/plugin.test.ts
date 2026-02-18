@@ -65,7 +65,7 @@ describe("openviking plugin", () => {
 
     globalThis.fetch = ((async (url: string | URL | Request) => {
       const urlText = String(url);
-      if (urlText.endsWith("/api/v1/search/find")) {
+      if (urlText.endsWith("/api/v1/search/search")) {
         return new Response(
           JSON.stringify({
             status: "ok",

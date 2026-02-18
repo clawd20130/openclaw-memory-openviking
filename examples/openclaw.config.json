@@ -25,7 +25,7 @@
             "waitForProcessing": false
           },
           "search": {
-            "mode": "find",
+            "mode": "search",
             "defaultLimit": 5
           }
         }

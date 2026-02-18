@@ -58,7 +58,7 @@ export interface SyncConfig {
 }
 
 export interface SearchConfig {
-  /** 检索方法：find（默认）或 search（带会话语义） */
+  /** 检索方法：search（默认，带会话语义）或 find */
   mode?: "find" | "search";
   /** 默认返回结果数 */
   defaultLimit?: number;

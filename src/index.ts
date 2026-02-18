@@ -158,7 +158,7 @@ const plugin = {
       "search.mode": {
         label: "Search Mode",
         advanced: true,
-        help: "find: stateless retrieval (default). search: session-aware retrieval when session context is available."
+        help: "search: session-aware retrieval (default). find: stateless retrieval for low-latency lookups."
       },
       "search.defaultLimit": {
         label: "Default Limit",
@@ -418,7 +418,7 @@ function resolveConfig(raw: unknown): OpenVikingPluginConfig {
         ? (input.mappings as Record<string, string>)
         : undefined,
     search: {
-      mode: searchRaw.mode === "search" ? "search" : "find",
+      mode: searchRaw.mode === "find" ? "find" : "search",
       defaultLimit:
         typeof searchRaw.defaultLimit === "number" && Number.isFinite(searchRaw.defaultLimit)
           ? searchRaw.defaultLimit

@@ -11,7 +11,7 @@ Use OpenViking as the OpenClaw memory backend, exposing `memory_search` and `mem
 
 ## Features
 
-- Search via OpenViking: `POST /api/v1/search/find` or `POST /api/v1/search/search`
+- Search via OpenViking: `POST /api/v1/search/search` or `POST /api/v1/search/find`
 - Read content via OpenViking: `GET /api/v1/content/read`, `GET /api/v1/content/overview`
 - Sync local memory files to OpenViking using `GET /api/v1/fs/stat` + `POST /api/v1/resources` (with `POST /api/v1/fs/mkdir` / `DELETE /api/v1/fs` only when needed)
 - Automatically falls back to local file reads when OpenViking reads fail
@@ -67,7 +67,7 @@ npm run build
           },
 
           search: {
-            mode: "find", // "find" | "search"
+            mode: "search", // "search" | "find"
             defaultLimit: 6,
             scoreThreshold: 0,
             targetUri: "viking://resources/openclaw/main/memory-sync"
@@ -91,9 +91,9 @@ npm run build
 
 ### `search` fields
 
-- `search.mode` (default: `find`):
-  - `find`: stateless retrieval via `/api/v1/search/find`; best default for stable and low-latency memory lookup.
-  - `search`: session-aware retrieval via `/api/v1/search/search`; best when you want conversational continuity and session context is available.
+- `search.mode` (default: `search`):
+  - `search`: session-aware retrieval via `/api/v1/search/search`; recommended default when session context is available.
+  - `find`: stateless retrieval via `/api/v1/search/find`; useful for low-latency or strictly stateless lookup.
 - `search.defaultLimit` (default: `6`): default result count when `memory_search.maxResults` is not passed.
 - `search.scoreThreshold` (default: `0`, range: `0..1`): minimum score to keep a result.
 - `search.targetUri` (optional): restrict search scope to one URI subtree.
